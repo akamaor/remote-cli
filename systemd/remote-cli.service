@@ -1,0 +1,89 @@
+[Unit]
+Description=Secure Remote Chat CLI (Telegram)
+Documentation=https://github.com/akamaor/remote-cli
+# Ensure the network stack is fully up before starting (required for Telegram API)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=chatcli
+Group=chatcli
+WorkingDirectory=/opt/remote-cli
+
+# Load secrets from a root-owned, 600-permissions file so the token
+# never appears in the process table or journald as an argument.
+EnvironmentFile=/opt/remote-cli/.env
+
+ExecStart=/opt/remote-cli/venv/bin/python -m src.main
+
+# Restart automatically on any non-zero exit (network blip, API error, etc.)
+Restart=on-failure
+RestartSec=15
+# Limit restart storms: max 5 restarts in 60 seconds
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Stdout/stderr go to journald — view with: journalctl -u remote-cli -f
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=remote-cli
+
+# -----------------------------------------------------------------------
+# Systemd Security Hardening
+# These directives reduce blast radius if the process is compromised.
+# -----------------------------------------------------------------------
+
+# Prevent the process from gaining new privileges via setuid/sudo inside it
+NoNewPrivileges=yes
+
+# Mount the OS as read-only except for explicit ReadWritePaths below
+ProtectSystem=strict
+
+# The chatcli home dir is /opt/remote-cli; block access to real user homes
+ProtectHome=yes
+
+# Allow writing only to the log directory
+ReadWritePaths=/var/log/remote-cli
+
+# Give the process a private /tmp, isolated from other services
+PrivateTmp=yes
+
+# No access to physical devices
+PrivateDevices=yes
+
+# Prevent modifying kernel tunables
+ProtectKernelTunables=yes
+
+# Prevent loading/unloading kernel modules
+ProtectKernelModules=yes
+
+# Prevent tampering with cgroup hierarchy
+ProtectControlGroups=yes
+
+# Allow only IPv4, IPv6, and Unix sockets (required for Telegram HTTPS + DNS)
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Prevent creation of new namespaces
+RestrictNamespaces=yes
+
+# Prevent changing execution personality (e.g. 32-bit mode on 64-bit kernel)
+LockPersonality=yes
+
+# Prevent real-time scheduling (no legitimate need for it)
+RestrictRealtime=yes
+
+# Prevent SUID/SGID bits from taking effect on new files
+RestrictSUIDSGID=yes
+
+# Clean up IPC objects on exit
+RemoveIPC=yes
+
+# Limit the system calls this process is allowed to make to a safe subset.
+# Uses the @system-service set which covers all typical server/daemon needs
+# including fork, exec, network, file I/O, and signal handling.
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+[Install]
+WantedBy=multi-user.target
