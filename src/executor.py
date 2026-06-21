@@ -3,7 +3,7 @@ import shlex
 import signal
 import subprocess
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 
@@ -22,6 +22,7 @@ def execute(
     timeout: int,
     max_output_lines: int,
     max_output_bytes: int,
+    cwd: str = "/",
 ) -> ExecutionResult:
     t0 = time.monotonic()
 
@@ -57,6 +58,7 @@ def execute(
             text=True,
             encoding="utf-8",
             errors="replace",
+            cwd=cwd,                    # honour the session working directory
             preexec_fn=os.setsid,       # new process group → clean SIGKILL of entire tree
         )
     except FileNotFoundError:
@@ -74,6 +76,14 @@ def execute(
             output="",
             elapsed_seconds=time.monotonic() - t0,
             error_msg=f"Permission denied: {args[0]!r}",
+        )
+    except NotADirectoryError:
+        return ExecutionResult(
+            command=command,
+            exit_code=None,
+            output="",
+            elapsed_seconds=time.monotonic() - t0,
+            error_msg=f"Working directory no longer exists: {cwd!r}",
         )
     except OSError as exc:
         return ExecutionResult(
@@ -129,7 +139,6 @@ def _truncate(text: str, max_lines: int, max_bytes: int) -> str:
     # Byte-level cap (Telegram hard limit is ~4096 bytes per message)
     encoded = result.encode("utf-8")
     if len(encoded) > max_bytes:
-        # Slice from the end so the most recent output is preserved
         result = "[... truncated to fit message limit ...]\n" + encoded[-max_bytes:].decode(
             "utf-8", errors="replace"
         )

@@ -70,7 +70,8 @@ service_status() {
     if ! is_installed; then
         echo "NOT_INSTALLED"; return
     fi
-    if ! systemctl list-unit-files "${SERVICE}.service" &>/dev/null 2>&1 | grep -q "${SERVICE}"; then
+    # Check the unit file exists on disk — most reliable cross-distro test
+    if [[ ! -f "/etc/systemd/system/${SERVICE}.service" ]]; then
         echo "NOT_INSTALLED"; return
     fi
     if systemctl is-active --quiet "${SERVICE}" 2>/dev/null; then

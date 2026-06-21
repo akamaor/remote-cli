@@ -1,50 +1,67 @@
 # =============================================================================
 # /etc/sudoers.d/chatcli
 #
-# Sudo allowlist for the 'chatcli' service account.
-# Copy to /etc/sudoers.d/chatcli  AND  set permissions to 440:
+# Sudo config for the 'chatcli' service account.
+# Install:
 #   sudo cp scripts/sudoers_chatcli.example /etc/sudoers.d/chatcli
 #   sudo chmod 440 /etc/sudoers.d/chatcli
-#   sudo visudo -c   # validate syntax before relying on it
+#   sudo visudo -c    # validate before relying on it
 #
-# SECURITY PRINCIPLES:
-#   - Only list commands the operator actually needs remotely.
-#   - Never add wildcards like /bin/systemctl * — an attacker who reaches
-#     the chatcli account could then run: sudo systemctl daemon-reload and
-#     load a malicious unit. Be specific about which units are manageable.
-#   - Periodically audit this file against what you actually use.
+# Two modes are provided below — pick ONE and comment out the other.
 # =============================================================================
 
-# -- Service management (limit to your actual services) --
-Cmnd_Alias CHATCLI_SYSTEMCTL = \
-    /bin/systemctl status, \
-    /bin/systemctl status nginx, \
-    /bin/systemctl restart nginx, \
-    /bin/systemctl status docker, \
-    /bin/systemctl restart docker, \
-    /bin/systemctl status ssh, \
-    /bin/systemctl status remote-cli
+# =============================================================================
+# MODE 1 — FULL ACCESS (personal / home server use)
+#
+# Gives chatcli unrestricted sudo. Lets you run chmod, chown, apt install,
+# systemctl, and anything else without a prefix list.
+# Appropriate when you are the only user on the machine and trust your setup.
+# =============================================================================
+chatcli ALL=(ALL) NOPASSWD: ALL
 
-# -- Package management (read-only + upgrade; no install of arbitrary packages) --
-Cmnd_Alias CHATCLI_APT = \
-    /usr/bin/apt update, \
-    /usr/bin/apt upgrade -y, \
-    /usr/bin/apt list --upgradable
+
+# =============================================================================
+# MODE 2 — ALLOWLIST (shared / production server)
+#
+# Uncomment this block and comment out MODE 1 above if you want to restrict
+# exactly which commands can be elevated. More secure but requires maintenance.
+# =============================================================================
+
+# -- Service management --
+# Cmnd_Alias CHATCLI_SYSTEMCTL = \
+#     /bin/systemctl status, \
+#     /bin/systemctl status nginx, \
+#     /bin/systemctl restart nginx, \
+#     /bin/systemctl status docker, \
+#     /bin/systemctl restart docker, \
+#     /bin/systemctl status ssh, \
+#     /bin/systemctl status remote-cli, \
+#     /bin/systemctl restart remote-cli
+
+# -- File permissions --
+# Cmnd_Alias CHATCLI_FILES = \
+#     /bin/chmod, \
+#     /bin/chown, \
+#     /bin/mkdir, \
+#     /bin/rm, \
+#     /bin/mv, \
+#     /bin/cp
+
+# -- Package management --
+# Cmnd_Alias CHATCLI_APT = \
+#     /usr/bin/apt update, \
+#     /usr/bin/apt upgrade -y, \
+#     /usr/bin/apt install *, \
+#     /usr/bin/apt list --upgradable
 
 # -- Log inspection --
-Cmnd_Alias CHATCLI_LOGS = \
-    /bin/journalctl, \
-    /bin/journalctl -u nginx, \
-    /bin/journalctl -u docker, \
-    /bin/journalctl -u remote-cli
+# Cmnd_Alias CHATCLI_LOGS = \
+#     /bin/journalctl
 
-# -- Disk / hardware diagnostics (read-only) --
-Cmnd_Alias CHATCLI_DIAG = \
-    /bin/df, \
-    /bin/df -h, \
-    /sbin/fdisk -l, \
-    /usr/bin/smartctl -a /dev/sda
+# -- Disk / diagnostics --
+# Cmnd_Alias CHATCLI_DIAG = \
+#     /bin/df, \
+#     /bin/df -h, \
+#     /sbin/fdisk -l
 
-# -- Grant NOPASSWD access to ONLY the above aliases --
-# (NOPASSWD is required because the bot process has no TTY to enter a password)
-chatcli ALL=(ALL) NOPASSWD: CHATCLI_SYSTEMCTL, CHATCLI_APT, CHATCLI_LOGS, CHATCLI_DIAG
+# chatcli ALL=(ALL) NOPASSWD: CHATCLI_SYSTEMCTL, CHATCLI_FILES, CHATCLI_APT, CHATCLI_LOGS, CHATCLI_DIAG
