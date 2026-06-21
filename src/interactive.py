@@ -60,7 +60,10 @@ class InteractiveShell:
         """Write one line to bash stdin and return cleaned output."""
         if not self.is_alive():
             return "(session has ended)"
-        os.write(self._fd, (line + "\n").encode("utf-8", errors="replace"))
+        try:
+            os.write(self._fd, (line + "\n").encode("utf-8", errors="replace"))
+        except OSError:
+            return "(session has ended)"
         raw = self._read_until_quiet(timeout=self.MAX_TIMEOUT)
         return _ANSI.sub("", raw).strip()
 

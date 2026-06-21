@@ -72,6 +72,16 @@ def execute(
             env=_PROC_ENV,              # wide PATH so user-installed tools are found
         )
     except FileNotFoundError:
+        # Python raises FileNotFoundError for both a missing binary AND a missing cwd.
+        # Distinguish them so the session cwd-reset logic in the bot triggers correctly.
+        if not os.path.isdir(cwd):
+            return ExecutionResult(
+                command=command,
+                exit_code=None,
+                output="",
+                elapsed_seconds=time.monotonic() - t0,
+                error_msg=f"Working directory no longer exists: {cwd!r}",
+            )
         return ExecutionResult(
             command=command,
             exit_code=127,
@@ -121,7 +131,10 @@ def execute(
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         except (ProcessLookupError, OSError):
             pass
-        proc.wait()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
         return ExecutionResult(
             command=command,
             exit_code=None,

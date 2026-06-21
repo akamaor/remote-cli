@@ -93,7 +93,7 @@ Type any shell command as a plain message to execute it.
 
 <b>Navigation</b>
 <code>cd /path</code>  — change directory (persists across messages)
-<code>cd ..</code>     — up one level  |  <code>cd ~</code> — your home dir  |  <code>cd</code> — root /
+<code>cd ..</code>     — up one level  |  <code>cd ~</code> — your home dir  |  <code>cd</code> — home dir
 
 <b>Admin commands</b>
 Prefix with <code>sudo</code> for elevated access

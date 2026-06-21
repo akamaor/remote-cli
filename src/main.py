@@ -35,7 +35,7 @@ def main() -> None:
             timeout=20,
             long_polling_timeout=15,
             logger_level=logging.WARNING,   # suppress pyTelegramBotAPI debug noise
-            allowed_updates=["message"],
+            allowed_updates=["message", "callback_query"],
         )
     except KeyboardInterrupt:
         app_logger.info("Shutting down (KeyboardInterrupt)")
