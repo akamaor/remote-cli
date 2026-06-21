@@ -26,20 +26,61 @@ from .security import is_authorized, is_interactive_command
 
 # ---------------------------------------------------------------------------
 # Shortcut commands — appear in the Telegram "/" command picker.
-# Format: "command_name": ("shell command to run", "description shown in picker")
-# No pipes — shell=False is enforced. Use output truncation for long results.
+# Format: "name": ("shell command", "picker description")
+# shell=False is enforced — no pipes, no redirection operators.
+# Long output is truncated to MAX_OUTPUT_LINES by the executor.
 # ---------------------------------------------------------------------------
 _SHORTCUTS: dict = {
-    "ls":       ("ls -la",                                                          "List files in current directory"),
-    "df":       ("df -h",                                                           "Disk space usage"),
-    "free":     ("free -h",                                                         "Memory usage"),
-    "uptime":   ("uptime",                                                          "Uptime and load average"),
-    "ps":       ("ps aux --sort=-%cpu",                                             "Processes sorted by CPU"),
-    "ip":       ("ip -br addr",                                                     "Network interfaces and IPs"),
-    "services": ("systemctl list-units --type=service --state=running --no-pager",  "Running systemd services"),
-    "disk":     ("df -h --output=source,size,used,avail,pcent,target",              "Disk usage (detailed)"),
-    "whoami":   ("id",                                                              "Current user and groups"),
-    "netstat":  ("ss -tulnp",                                                       "Open ports and listeners"),
+    # ── System ──────────────────────────────────────────────────────────────
+    "sysinfo":     ("uname -a",                                                         "OS and kernel version"),
+    "hostname":    ("hostname -f",                                                      "Full hostname"),
+    "cpu":         ("lscpu",                                                            "CPU architecture and details"),
+    "uptime":      ("uptime",                                                           "Uptime and load average"),
+    "whoami":      ("id",                                                               "Current user and groups"),
+    "env":         ("env",                                                              "Environment variables"),
+
+    # ── Filesystem ──────────────────────────────────────────────────────────
+    "ls":          ("ls -la",                                                           "List files in current directory"),
+    "df":          ("df -h",                                                            "Disk space (summary)"),
+    "disk":        ("df -h --output=source,size,used,avail,pcent,target",               "Disk usage (full table)"),
+    "du":          ("du -sh /home /var /tmp /opt /root",                                "Directory sizes"),
+    "inodes":      ("df -i",                                                            "Inode usage per filesystem"),
+
+    # ── Memory / CPU ────────────────────────────────────────────────────────
+    "free":        ("free -h",                                                          "RAM and swap usage"),
+    "ps":          ("ps aux --sort=-%cpu",                                              "All processes sorted by CPU"),
+    "top5cpu":     ("ps axo pid,user,%cpu,%mem,comm --sort=-%cpu",                      "Top processes by CPU"),
+    "top5mem":     ("ps axo pid,user,%cpu,%mem,comm --sort=-%mem",                      "Top processes by memory"),
+    "vmstat":      ("vmstat -s",                                                        "Virtual memory statistics"),
+
+    # ── Network ─────────────────────────────────────────────────────────────
+    "ip":          ("ip -br addr",                                                      "Network interfaces and IPs"),
+    "routes":      ("ip route",                                                         "Routing table"),
+    "netstat":     ("ss -tulnp",                                                        "Listening ports and services"),
+    "connections": ("ss -tp",                                                           "Active TCP connections"),
+    "dns":         ("cat /etc/resolv.conf",                                             "DNS resolver config"),
+
+    # ── Services ────────────────────────────────────────────────────────────
+    "services":    ("systemctl list-units --type=service --state=running --no-pager",   "Running systemd services"),
+    "failed":      ("systemctl --failed --no-pager",                                    "Failed systemd services"),
+    "timers":      ("systemctl list-timers --no-pager",                                 "Scheduled systemd timers"),
+    "botstatus":   ("sudo systemctl status remote-cli --no-pager",                      "Remote CLI service status"),
+
+    # ── Logs ────────────────────────────────────────────────────────────────
+    "logs":        ("journalctl -n 40 --no-pager",                                      "Last 40 journal entries"),
+    "errors":      ("journalctl -p err -n 20 --no-pager",                               "Last 20 error-level events"),
+    "auth":        ("journalctl -u sshd -n 20 --no-pager",                              "Last 20 SSH/auth events"),
+    "botlogs":     ("journalctl -u remote-cli -n 30 --no-pager",                        "Last 30 bot log entries"),
+
+    # ── Users / Security ────────────────────────────────────────────────────
+    "who":         ("who",                                                              "Currently logged-in users"),
+    "last":        ("last -n 10",                                                       "Last 10 logins"),
+    "users":       ("cut -d: -f1 /etc/passwd",                                         "All local user accounts"),
+    "sudoers":     ("cat /etc/sudoers.d/chatcli",                                       "Current bot sudo allowlist"),
+
+    # ── Packages ────────────────────────────────────────────────────────────
+    "updates":     ("apt list --upgradable",                                            "Available package updates"),
+    "installed":   ("dpkg -l",                                                          "All installed packages"),
 }
 
 _HELP_TEXT = """<b>Secure Remote CLI</b>
@@ -48,38 +89,90 @@ Type any shell command as a plain message to execute it.
 
 <b>Navigation</b>
 <code>cd /path</code>  — change directory (persists across messages)
-<code>cd ..</code>     — go up one level
-<code>cd</code>        — back to /
-<code>pwd</code>       — show current path
+<code>cd ..</code>     — go up one level  |  <code>cd</code> — back to /
 
 <b>Admin commands</b>
 Prefix with <code>sudo</code> for elevated access
-e.g. <code>sudo chmod 755 /var/www/html</code>
+e.g. <code>sudo chmod 755 /etc/myfile</code>
 
-<b>Shortcut commands</b>
-/ls · /df · /disk · /free · /uptime · /ps · /ip · /services · /netstat · /whoami
+<b>System</b>
+/sysinfo /hostname /cpu /uptime /whoami /env
 
-<b>Slash commands</b>
-/ping    — latency and host info
-/pwd     — current directory
-/help    — this message
+<b>Filesystem</b>
+/ls /df /disk /du /inodes
+
+<b>Memory &amp; CPU</b>
+/free /ps /top5cpu /top5mem /vmstat
+
+<b>Network</b>
+/ip /routes /netstat /connections /dns
+
+<b>Services</b>
+/services /failed /timers /botstatus
+
+<b>Logs</b>
+/logs /errors /auth /botlogs
+
+<b>Users &amp; Security</b>
+/who /last /users /sudoers
+
+<b>Packages</b>
+/updates /installed
+
+<b>Utility</b>
+/ping — latency check  |  /pwd — current dir  |  /help — this message
 """
 
-# Commands registered with the Telegram Bot API (appear in the / picker)
+# Commands registered with the Telegram Bot API (appear in the / picker).
+# Telegram description limit: 256 chars. Command name limit: 32 chars, lowercase.
 _BOT_COMMANDS = [
-    BotCommand("help",     "Help & usage guide"),
-    BotCommand("ping",     "Latency and host check"),
-    BotCommand("pwd",      "Show current directory"),
-    BotCommand("ls",       "List files in current directory"),
-    BotCommand("df",       "Disk space usage"),
-    BotCommand("disk",     "Disk usage (detailed)"),
-    BotCommand("free",     "Memory usage"),
-    BotCommand("uptime",   "Uptime and load average"),
-    BotCommand("ps",       "Processes sorted by CPU"),
-    BotCommand("ip",       "Network interfaces and IPs"),
-    BotCommand("services", "Running systemd services"),
-    BotCommand("netstat",  "Open ports and listeners"),
-    BotCommand("whoami",   "Current user and groups"),
+    # Utility
+    BotCommand("help",        "Help and usage guide"),
+    BotCommand("ping",        "Latency and host check"),
+    BotCommand("pwd",         "Show current directory"),
+    # System
+    BotCommand("sysinfo",     "OS and kernel version"),
+    BotCommand("hostname",    "Full hostname"),
+    BotCommand("cpu",         "CPU architecture and details"),
+    BotCommand("uptime",      "Uptime and load average"),
+    BotCommand("whoami",      "Current user and groups"),
+    BotCommand("env",         "Environment variables"),
+    # Filesystem
+    BotCommand("ls",          "List files in current directory"),
+    BotCommand("df",          "Disk space summary"),
+    BotCommand("disk",        "Disk usage full table"),
+    BotCommand("du",          "Directory sizes"),
+    BotCommand("inodes",      "Inode usage per filesystem"),
+    # Memory / CPU
+    BotCommand("free",        "RAM and swap usage"),
+    BotCommand("ps",          "All processes sorted by CPU"),
+    BotCommand("top5cpu",     "Top processes by CPU"),
+    BotCommand("top5mem",     "Top processes by memory"),
+    BotCommand("vmstat",      "Virtual memory statistics"),
+    # Network
+    BotCommand("ip",          "Network interfaces and IPs"),
+    BotCommand("routes",      "Routing table"),
+    BotCommand("netstat",     "Listening ports and services"),
+    BotCommand("connections", "Active TCP connections"),
+    BotCommand("dns",         "DNS resolver config"),
+    # Services
+    BotCommand("services",    "Running systemd services"),
+    BotCommand("failed",      "Failed systemd services"),
+    BotCommand("timers",      "Scheduled systemd timers"),
+    BotCommand("botstatus",   "Remote CLI service status"),
+    # Logs
+    BotCommand("logs",        "Last 40 journal entries"),
+    BotCommand("errors",      "Last 20 error-level events"),
+    BotCommand("auth",        "Last 20 SSH auth events"),
+    BotCommand("botlogs",     "Last 30 bot log entries"),
+    # Users / Security
+    BotCommand("who",         "Currently logged-in users"),
+    BotCommand("last",        "Last 10 logins"),
+    BotCommand("users",       "All local user accounts"),
+    BotCommand("sudoers",     "Current bot sudo allowlist"),
+    # Packages
+    BotCommand("updates",     "Available package updates"),
+    BotCommand("installed",   "All installed packages"),
 ]
 
 
