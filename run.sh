@@ -85,9 +85,14 @@ service_status() {
 }
 
 has_config() {
-    [[ -f "${ENV_FILE}" ]] && \
-    grep -qE '^TELEGRAM_BOT_TOKEN=.{10,}' "${ENV_FILE}" 2>/dev/null && \
-    grep -qE '^ALLOWED_TELEGRAM_USER_IDS=[0-9]' "${ENV_FILE}" 2>/dev/null
+    [[ -f "${ENV_FILE}" ]] || return 1
+    # The .env is 640 root:chatcli — a regular operator may not be able to read it directly.
+    # sudo -n uses the cached session and never prompts, so this is silent.
+    local content
+    content=$(cat "${ENV_FILE}" 2>/dev/null || sudo -n cat "${ENV_FILE}" 2>/dev/null || true)
+    [[ -z "${content}" ]] && return 1
+    echo "${content}" | grep -qE '^TELEGRAM_BOT_TOKEN=.{10,}' && \
+    echo "${content}" | grep -qE '^ALLOWED_TELEGRAM_USER_IDS=[0-9]'
 }
 
 # =============================================================================
@@ -290,10 +295,11 @@ menu_config() {
         fi
 
         echo ""
-        echo -e "  ${M}[1]${N}  Edit .env             Bot token, allowed user IDs, timeouts"
-        echo -e "  ${M}[2]${N}  Edit sudoers          Allowed sudo commands for '${SERVICE_USER}'"
-        echo -e "  ${M}[3]${N}  Install sudoers       Deploy template to /etc/sudoers.d/chatcli"
-        echo -e "  ${M}[4]${N}  Show current .env     Print config (token is masked)"
+        echo -e "  ${M}${BOLD}[1]${N}  Setup Wizard          ${BOLD}Enter token + user ID step by step${N}"
+        echo -e "  ${M}[2]${N}  Edit .env directly    Open in text editor (advanced)"
+        echo -e "  ${M}[3]${N}  Install sudoers       Deploy sudo allowlist template"
+        echo -e "  ${M}[4]${N}  Edit sudoers          Modify sudo allowlist"
+        echo -e "  ${M}[5]${N}  Show current config   Print .env (token masked)"
         echo ""
         echo -e "  ${D}[0]  Back${N}"
         echo ""
@@ -301,14 +307,176 @@ menu_config() {
         read -r choice
 
         case "${choice}" in
-            1) _edit_env       ;;
-            2) _edit_sudoers   ;;
+            1) _wizard_config   ;;
+            2) _edit_env        ;;
             3) _install_sudoers ;;
-            4) _show_env       ;;
-            0|q|Q) return      ;;
+            4) _edit_sudoers    ;;
+            5) _show_env        ;;
+            0|q|Q) return       ;;
             *) echo -e "  ${R}Invalid option.${N}"; sleep 1 ;;
         esac
     done
+}
+
+_wizard_config() {
+    banner
+    echo -e "  ${W}${BOLD}SETUP WIZARD${N}"
+    echo ""
+    echo -e "  ${D}Guided configuration — takes about 2 minutes.${N}"
+    echo ""
+    sep
+    echo ""
+
+    # ---- Read current values (sudo -n = silent, uses cached session) ----
+    local current_token="" current_ids=""
+    if [[ -f "${ENV_FILE}" ]]; then
+        local existing
+        existing=$(cat "${ENV_FILE}" 2>/dev/null || sudo -n cat "${ENV_FILE}" 2>/dev/null || true)
+        current_token=$(echo "${existing}" | grep '^TELEGRAM_BOT_TOKEN=' | cut -d= -f2-)
+        current_ids=$(echo "${existing}"   | grep '^ALLOWED_TELEGRAM_USER_IDS=' | cut -d= -f2-)
+    fi
+
+    # =========================================================
+    # STEP 1 — Bot Token
+    # =========================================================
+    echo -e "  ${C}${BOLD}Step 1 of 2${N}  ${W}Telegram Bot Token${N}"
+    echo ""
+    echo -e "  ${D}How to get your token:${N}"
+    echo -e "  ${D}  1. Open Telegram and search for  @BotFather${N}"
+    echo -e "  ${D}  2. Send:  /newbot${N}"
+    echo -e "  ${D}  3. Choose a name and username for your bot${N}"
+    echo -e "  ${D}  4. BotFather will reply with your token — paste it below${N}"
+    echo ""
+    echo -e "  ${D}  Token format:  1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ${N}"
+    echo ""
+
+    if [[ -n "${current_token}" ]]; then
+        local masked="${current_token:0:10}...${current_token: -4}"
+        echo -e "  Current value: ${D}${masked}${N}"
+        echo -e "  ${D}(press Enter to keep the existing token)${N}"
+        echo ""
+    fi
+
+    local input_token=""
+    while true; do
+        echo -ne "  ${W}Paste your bot token: ${N}"
+        read -r input_token
+
+        # Keep existing if user pressed Enter
+        if [[ -z "${input_token}" && -n "${current_token}" ]]; then
+            input_token="${current_token}"
+            ok "Keeping existing token"
+            break
+        fi
+
+        # Basic format check: digits, colon, then 35+ alphanumeric chars
+        if [[ "${input_token}" =~ ^[0-9]{7,12}:[A-Za-z0-9_-]{35,}$ ]]; then
+            ok "Token format looks correct"
+            break
+        else
+            warn "That doesn't look right. Expected format: 1234567890:ABCdefGHIjklMNOpqrSTUvwxYZ"
+            echo -e "  ${D}Check you copied the full token from BotFather and try again.${N}"
+            echo ""
+        fi
+    done
+
+    echo ""
+    sep
+    echo ""
+
+    # =========================================================
+    # STEP 2 — Allowed User IDs
+    # =========================================================
+    echo -e "  ${C}${BOLD}Step 2 of 2${N}  ${W}Your Telegram User ID${N}"
+    echo ""
+    echo -e "  ${D}How to find your numeric User ID:${N}"
+    echo -e "  ${D}  1. Open Telegram and search for  @userinfobot${N}"
+    echo -e "  ${D}  2. Send any message to it${N}"
+    echo -e "  ${D}  3. It will reply with your  Id:  number — paste it below${N}"
+    echo ""
+    echo -e "  ${D}  Multiple admins: separate IDs with a comma — 123456789,987654321${N}"
+    echo ""
+
+    if [[ -n "${current_ids}" ]]; then
+        echo -e "  Current value: ${D}${current_ids}${N}"
+        echo -e "  ${D}(press Enter to keep the existing IDs)${N}"
+        echo ""
+    fi
+
+    local input_ids=""
+    while true; do
+        echo -ne "  ${W}Paste your User ID: ${N}"
+        read -r input_ids
+
+        # Keep existing if user pressed Enter
+        if [[ -z "${input_ids}" && -n "${current_ids}" ]]; then
+            input_ids="${current_ids}"
+            ok "Keeping existing user IDs"
+            break
+        fi
+
+        # Must be one or more comma-separated integers
+        if [[ "${input_ids}" =~ ^[0-9]+(,[[:space:]]*[0-9]+)*$ ]]; then
+            # Strip any spaces around commas
+            input_ids="${input_ids//[[:space:]]/}"
+            ok "User ID format looks correct"
+            break
+        else
+            warn "User IDs must be numbers only — e.g.  123456789  or  123456789,987654321"
+            echo -e "  ${D}Make sure you got the Id: number from @userinfobot, not a username.${N}"
+            echo ""
+        fi
+    done
+
+    echo ""
+    sep
+    echo ""
+
+    # =========================================================
+    # Write .env
+    # =========================================================
+    echo -e "  ${W}${BOLD}Saving configuration...${N}"
+    echo ""
+    need_root_warning
+
+    # Write to a temp file first, then copy with sudo
+    local tmpfile
+    tmpfile=$(mktemp /tmp/remote-cli-cfg.XXXXXX)
+
+    printf 'TELEGRAM_BOT_TOKEN=%s\nALLOWED_TELEGRAM_USER_IDS=%s\nCOMMAND_TIMEOUT=10\nMAX_OUTPUT_LINES=50\nMAX_OUTPUT_BYTES=3800\nLOG_DIR=%s\n' \
+        "${input_token}" "${input_ids}" "${LOG_DIR}" > "${tmpfile}"
+
+    local write_ok=false
+    if run_as_root cp "${tmpfile}" "${ENV_FILE}" 2>/dev/null; then
+        run_as_root chown root:"${SERVICE_USER}" "${ENV_FILE}" 2>/dev/null || true
+        run_as_root chmod 640 "${ENV_FILE}" 2>/dev/null || true
+        write_ok=true
+    fi
+    rm -f "${tmpfile}"
+
+    if [[ "${write_ok}" == true ]]; then
+        ok "Configuration written to ${ENV_FILE}"
+    else
+        err "Failed to write ${ENV_FILE} — try running run.sh with sudo"
+        press_any_key
+        return
+    fi
+
+    echo ""
+    sep
+    echo ""
+    ok "${BOLD}All done!${N}"
+    echo ""
+
+    if is_installed; then
+        echo -ne "  Restart the service now to apply changes? ${D}[Y/n]${N}: "
+        read -r answer
+        [[ "${answer}" =~ ^[Nn]$ ]] || action_restart
+    else
+        echo -e "  ${D}Return to the main menu and run [1] Install to deploy the service.${N}"
+        echo ""
+        press_any_key
+    fi
 }
 
 _edit_env() {
@@ -515,10 +683,11 @@ action_install() {
     # Prompt for next steps
     if ! has_config; then
         warn "You must set your bot token and user IDs before the service will work."
-        echo -ne "  Open .env for editing now? ${D}[Y/n]${N}: "
+        echo -ne "  Configure now? ${D}[Y/n]${N}: "
         read -r answer
         if [[ ! "${answer}" =~ ^[Nn]$ ]]; then
-            _edit_env
+            _wizard_config
+            return
         fi
     fi
 
