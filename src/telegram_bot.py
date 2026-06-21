@@ -68,15 +68,15 @@ _SHORTCUTS: dict = {
     "connections": ("ss -tp",                                                           "Active TCP connections"),
     "dns":         ("cat /etc/resolv.conf",                                             "DNS resolver config"),
     # Services
-    "services":    ("systemctl list-units --type=service --state=running --no-pager",   "Running systemd services"),
-    "failed":      ("systemctl --failed --no-pager",                                    "Failed systemd services"),
-    "timers":      ("systemctl list-timers --no-pager",                                 "Scheduled systemd timers"),
+    "services":    ("sudo systemctl list-units --type=service --state=running --no-pager", "Running systemd services"),
+    "failed":      ("sudo systemctl --failed --no-pager",                                "Failed systemd services"),
+    "timers":      ("sudo systemctl list-timers --no-pager",                             "Scheduled systemd timers"),
     "rc_status":   ("sudo systemctl status remote-cli --no-pager",                      "Remote CLI service status"),
     # Logs
-    "logs":        ("journalctl -n 40 --no-pager",                                      "Last 40 journal entries"),
-    "errors":      ("journalctl -p err -n 20 --no-pager",                               "Last 20 error-level events"),
-    "auth":        ("journalctl -u sshd -n 20 --no-pager",                              "Last 20 SSH auth events"),
-    "rc_logs":     ("journalctl -u remote-cli -n 30 --no-pager",                        "Last 30 bot log entries"),
+    "logs":        ("sudo journalctl -n 40 --no-pager",                                 "Last 40 journal entries"),
+    "errors":      ("sudo journalctl -p err -n 20 --no-pager",                          "Last 20 error-level events"),
+    "auth":        ("sudo journalctl -u sshd -n 20 --no-pager",                         "Last 20 SSH auth events"),
+    "rc_logs":     ("sudo journalctl -u remote-cli -n 30 --no-pager",                   "Last 30 bot log entries"),
     # Users / Security
     "who":         ("who",                                                              "Currently logged-in users"),
     "last":        ("last -n 10",                                                       "Last 10 logins"),
