@@ -536,13 +536,6 @@ def _resolve_cd(raw: str, current_cwd: str, home_dir: str) -> tuple:
         return current_cwd, f"cd: {original}: No such file or directory"
     if not os.path.isdir(target):
         return current_cwd, f"cd: {original}: Not a directory"
-    if not os.access(target, os.X_OK):
-        return (
-            current_cwd,
-            f"cd: {original}: Permission denied\n"
-            f"Tip: run  sudo chmod o+x {target}  to allow traversal, "
-            f"then use  sudo ls {target}  to list files",
-        )
 
     return target, ""
 
