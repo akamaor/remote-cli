@@ -15,6 +15,10 @@ EnvironmentFile=/opt/remote-cli/.env
 
 ExecStart=/opt/remote-cli/venv/bin/python -m src.main
 
+# Wide PATH so user-installed tools (claude, npm/pip globals, snap) are visible.
+# Add your own paths via EXTRA_PATH in /opt/remote-cli/.env instead of editing here.
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin"
+
 Restart=on-failure
 RestartSec=15
 StartLimitIntervalSec=60

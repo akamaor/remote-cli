@@ -146,25 +146,29 @@ main_menu() {
         banner
         echo -e "  ${W}${BOLD}MAIN MENU${N}"
         echo ""
-        echo -e "  ${D}── SERVICE ──────────────────────────────────────────────────${N}"
+
+        echo -e "  ${C}${BOLD}── SERVICE ──────────────────────────────────────────────────${N}"
         if is_installed; then
-            echo -e "  ${W}1${N}  Install / Reinstall   Overwrite deployment from current source"
+            echo -e "  ${C}${BOLD}1${N}  ${W}Install / Reinstall${N}   ${D}Overwrite deployment from current source${N}"
         else
             echo -e "  ${G}${BOLD}1  Install               First-time setup${N}"
         fi
-        echo -e "  ${W}2${N}  Status                Service health dashboard"
-        echo -e "  ${W}3${N}  Start                 Start the bot"
-        echo -e "  ${W}4${N}  Stop                  Stop the bot"
-        echo -e "  ${W}5${N}  Restart               Restart the bot"
+        echo -e "  ${C}${BOLD}2${N}  ${W}Status               ${N}  ${D}Service health dashboard${N}"
+        echo -e "  ${C}${BOLD}3${N}  ${W}Start                ${N}  ${D}Start the bot${N}"
+        echo -e "  ${C}${BOLD}4${N}  ${W}Stop                 ${N}  ${D}Stop the bot${N}"
+        echo -e "  ${C}${BOLD}5${N}  ${W}Restart              ${N}  ${D}Restart the bot${N}"
         echo ""
-        echo -e "  ${D}── MANAGEMENT ───────────────────────────────────────────────${N}"
-        echo -e "  ${W}6${N}  Logs                  Live logs and audit trail"
-        echo -e "  ${W}7${N}  Config                Edit .env, HOME_DIR, sudo permissions"
-        echo -e "  ${W}8${N}  Update                Sync source, reinstall deps, restart"
+
+        echo -e "  ${M}${BOLD}── MANAGEMENT ───────────────────────────────────────────────${N}"
+        echo -e "  ${M}${BOLD}6${N}  ${W}Logs                 ${N}  ${D}Live logs and audit trail${N}"
+        echo -e "  ${M}${BOLD}7${N}  ${W}Config               ${N}  ${D}Edit .env, HOME_DIR, sudo permissions${N}"
+        echo -e "  ${M}${BOLD}8${N}  ${W}Update               ${N}  ${D}Sync source, reinstall deps, restart${N}"
         echo ""
-        echo -e "  ${D}── DANGER ───────────────────────────────────────────────────${N}"
-        echo -e "  ${R}9${N}  Uninstall             Remove service, files, and user"
+
+        echo -e "  ${R}${BOLD}── DANGER ───────────────────────────────────────────────────${N}"
+        echo -e "  ${R}${BOLD}9${N}  ${R}Uninstall            ${N}  ${D}Remove service, files, and user${N}"
         echo ""
+
         echo -e "  ${D}a  About   0  Exit${N}"
         echo ""
         echo -ne "  ${W}Choice → ${N}"
