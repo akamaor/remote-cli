@@ -395,6 +395,10 @@ def build_bot(
                 return
 
         # ── Normal one-shot mode ──────────────────────────────────────
+        # Normalize first word to lowercase so "Ls", "CD", "History" all work
+        _p = raw.split(None, 1)
+        raw = _p[0].lower() + (" " + _p[1] if len(_p) > 1 else "")
+
         first_token = raw.split()[0].split("/")[-1].lower() if raw.split() else ""
 
         # Handle cd (shell builtin — cannot be exec'd as a subprocess)
@@ -566,21 +570,21 @@ def _check_access(message: Message, config: Config, audit_logger: logging.Logger
 
 
 def _audit(audit_logger: logging.Logger, user_id: int, result: ExecutionResult) -> None:
-    """Audit trail — stdout content intentionally excluded."""
+    out = result.output.replace("\n", "\\n") if result.output else ""
     if result.timed_out:
         audit_logger.warning(
-            "TIMEOUT | user_id=%d | cmd=%r | elapsed=%.2fs",
-            user_id, result.command, result.elapsed_seconds,
+            "TIMEOUT | user_id=%d | cmd=%r | elapsed=%.2fs | output=%r",
+            user_id, result.command, result.elapsed_seconds, out,
         )
     elif result.error_msg:
         audit_logger.error(
-            "EXEC_ERROR | user_id=%d | cmd=%r | exit=%s | elapsed=%.2fs | err=%s",
-            user_id, result.command, result.exit_code, result.elapsed_seconds, result.error_msg,
+            "EXEC_ERROR | user_id=%d | cmd=%r | exit=%s | elapsed=%.2fs | err=%s | output=%r",
+            user_id, result.command, result.exit_code, result.elapsed_seconds, result.error_msg, out,
         )
     else:
         audit_logger.info(
-            "EXECUTED | user_id=%d | cmd=%r | exit=%s | elapsed=%.2fs",
-            user_id, result.command, result.exit_code, result.elapsed_seconds,
+            "EXECUTED | user_id=%d | cmd=%r | exit=%s | elapsed=%.2fs | output=%r",
+            user_id, result.command, result.exit_code, result.elapsed_seconds, out,
         )
 
 
