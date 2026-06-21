@@ -146,26 +146,26 @@ main_menu() {
         banner
         echo -e "  ${W}${BOLD}MAIN MENU${N}"
         echo ""
-        echo -e "  ${D}SERVICE${N}"
+        echo -e "  ${D}── SERVICE ──────────────────────────────────────────────────${N}"
         if is_installed; then
-            echo -e "  ${B}[1]${N}  Install / Reinstall   Overwrite deployment from current source"
+            echo -e "  ${W}1${N}  Install / Reinstall   Overwrite deployment from current source"
         else
-            echo -e "  ${G}${BOLD}[1]${N}  Install               First-time setup${N}"
+            echo -e "  ${G}${BOLD}1  Install               First-time setup${N}"
         fi
-        echo -e "  ${C}[2]${N}  Status                Service health dashboard"
-        echo -e "  ${G}[3]${N}  Start                 Start the bot"
-        echo -e "  ${Y}[4]${N}  Stop                  Stop the bot"
-        echo -e "  ${B}[5]${N}  Restart               Restart the bot"
+        echo -e "  ${W}2${N}  Status                Service health dashboard"
+        echo -e "  ${W}3${N}  Start                 Start the bot"
+        echo -e "  ${W}4${N}  Stop                  Stop the bot"
+        echo -e "  ${W}5${N}  Restart               Restart the bot"
         echo ""
-        echo -e "  ${D}MANAGEMENT${N}"
-        echo -e "  ${C}[6]${N}  Logs                  Live logs and audit trail"
-        echo -e "  ${M}[7]${N}  Config                Edit .env and sudo permissions"
-        echo -e "  ${B}[8]${N}  Update                Sync source, reinstall deps, restart"
+        echo -e "  ${D}── MANAGEMENT ───────────────────────────────────────────────${N}"
+        echo -e "  ${W}6${N}  Logs                  Live logs and audit trail"
+        echo -e "  ${W}7${N}  Config                Edit .env, HOME_DIR, sudo permissions"
+        echo -e "  ${W}8${N}  Update                Sync source, reinstall deps, restart"
         echo ""
-        echo -e "  ${D}DANGER ZONE${N}"
-        echo -e "  ${R}[9]${N}  Uninstall             Remove service, files, and user"
+        echo -e "  ${D}── DANGER ───────────────────────────────────────────────────${N}"
+        echo -e "  ${R}9${N}  Uninstall             Remove service, files, and user"
         echo ""
-        echo -e "  ${D}[a]  About   [0]  Exit${N}"
+        echo -e "  ${D}a  About   0  Exit${N}"
         echo ""
         echo -ne "  ${W}Choice → ${N}"
         read -r choice
@@ -329,18 +329,20 @@ _wizard_config() {
     echo ""
 
     # ---- Read current values (sudo -n = silent, uses cached session) ----
-    local current_token="" current_ids=""
+    local current_token="" current_ids="" current_home="" current_format=""
     if [[ -f "${ENV_FILE}" ]]; then
         local existing
         existing=$(cat "${ENV_FILE}" 2>/dev/null || sudo -n cat "${ENV_FILE}" 2>/dev/null || true)
-        current_token=$(echo "${existing}" | grep '^TELEGRAM_BOT_TOKEN=' | cut -d= -f2-)
-        current_ids=$(echo "${existing}"   | grep '^ALLOWED_TELEGRAM_USER_IDS=' | cut -d= -f2-)
+        current_token=$(echo "${existing}"   | grep '^TELEGRAM_BOT_TOKEN='           | cut -d= -f2-)
+        current_ids=$(echo "${existing}"     | grep '^ALLOWED_TELEGRAM_USER_IDS='    | cut -d= -f2-)
+        current_home=$(echo "${existing}"    | grep '^HOME_DIR='                     | cut -d= -f2-)
+        current_format=$(echo "${existing}"  | grep '^OUTPUT_FORMAT='                | cut -d= -f2-)
     fi
 
     # =========================================================
     # STEP 1 — Bot Token
     # =========================================================
-    echo -e "  ${C}${BOLD}Step 1 of 2${N}  ${W}Telegram Bot Token${N}"
+    echo -e "  ${C}${BOLD}Step 1 of 4${N}  ${W}Telegram Bot Token${N}"
     echo ""
     echo -e "  ${D}How to get your token:${N}"
     echo -e "  ${D}  1. Open Telegram and search for  @BotFather${N}"
@@ -388,7 +390,7 @@ _wizard_config() {
     # =========================================================
     # STEP 2 — Allowed User IDs
     # =========================================================
-    echo -e "  ${C}${BOLD}Step 2 of 2${N}  ${W}Your Telegram User ID${N}"
+    echo -e "  ${C}${BOLD}Step 2 of 4${N}  ${W}Your Telegram User ID${N}"
     echo ""
     echo -e "  ${D}How to find your numeric User ID:${N}"
     echo -e "  ${D}  1. Open Telegram and search for  @userinfobot${N}"
@@ -434,6 +436,88 @@ _wizard_config() {
     echo ""
 
     # =========================================================
+    # STEP 3 — Home Directory
+    # =========================================================
+    echo -e "  ${C}${BOLD}Step 3 of 4${N}  ${W}Home Directory${N}"
+    echo ""
+    echo -e "  ${D}This is where  cd ~  and bare  cd  will land you.${N}"
+    echo -e "  ${D}Usually /home/your-username  or /root for the root account.${N}"
+    echo ""
+
+    # Auto-suggest based on SUDO_USER (the user who ran sudo) or USER
+    local suggested_home="/home/${SUDO_USER:-${USER}}"
+    if [[ ! -d "${suggested_home}" ]]; then
+        suggested_home="/root"
+    fi
+
+    if [[ -n "${current_home}" ]]; then
+        echo -e "  Current value: ${D}${current_home}${N}"
+        echo -e "  ${D}(press Enter to keep it)${N}"
+    else
+        echo -e "  Suggested: ${D}${suggested_home}${N}  (press Enter to use this)"
+    fi
+    echo ""
+
+    local input_home=""
+    echo -ne "  ${W}Home directory: ${N}"
+    read -r input_home
+
+    if [[ -z "${input_home}" ]]; then
+        input_home="${current_home:-${suggested_home}}"
+        ok "Using ${input_home}"
+    elif [[ ! -d "${input_home}" ]]; then
+        warn "Directory ${input_home} does not exist yet (will still be saved)"
+    else
+        ok "Home directory set to ${input_home}"
+    fi
+
+    echo ""
+    sep
+    echo ""
+
+    # =========================================================
+    # STEP 4 — Output Format
+    # =========================================================
+    echo -e "  ${C}${BOLD}Step 4 of 4${N}  ${W}Output Format${N}"
+    echo ""
+    echo -e "  ${D}How command results look in your Telegram chat:${N}"
+    echo ""
+    echo -e "  ${W}1${N}  minimal   Raw output only, no decoration"
+    echo -e "  ${W}2${N}  standard  📁 cwd + output + exit code  ${D}(recommended)${N}"
+    echo -e "  ${W}3${N}  compact   📁 cwd and status on one header line"
+    echo -e "  ${W}4${N}  verbose   Hostname + cwd + echoed command + output + timing"
+    echo -e "  ${W}5${N}  styled    🟢/🔴 emoji status icons + bold text"
+    echo -e "  ${W}6${N}  rich      ━━ border header with hostname, cwd, and command"
+    echo ""
+
+    if [[ -n "${current_format}" ]]; then
+        echo -e "  Current: ${D}${current_format}${N}  (press Enter to keep it)"
+    else
+        echo -e "  ${D}(press Enter for  standard)${N}"
+    fi
+    echo ""
+
+    local input_fmt_num="" input_format=""
+    echo -ne "  ${W}Choose [1-6, Enter=standard]: ${N}"
+    read -r input_fmt_num
+
+    case "${input_fmt_num}" in
+        1) input_format="minimal"  ;;
+        2) input_format="standard" ;;
+        3) input_format="compact"  ;;
+        4) input_format="verbose"  ;;
+        5) input_format="styled"   ;;
+        6) input_format="rich"     ;;
+        "") input_format="${current_format:-standard}" ;;
+        *)  warn "Invalid choice — using standard"; input_format="standard" ;;
+    esac
+    ok "Format set to '${input_format}'"
+
+    echo ""
+    sep
+    echo ""
+
+    # =========================================================
     # Write .env
     # =========================================================
     echo -e "  ${W}${BOLD}Saving configuration...${N}"
@@ -444,8 +528,8 @@ _wizard_config() {
     local tmpfile
     tmpfile=$(mktemp /tmp/remote-cli-cfg.XXXXXX)
 
-    printf 'TELEGRAM_BOT_TOKEN=%s\nALLOWED_TELEGRAM_USER_IDS=%s\nCOMMAND_TIMEOUT=10\nMAX_OUTPUT_LINES=50\nMAX_OUTPUT_BYTES=3800\nLOG_DIR=%s\n' \
-        "${input_token}" "${input_ids}" "${LOG_DIR}" > "${tmpfile}"
+    printf 'TELEGRAM_BOT_TOKEN=%s\nALLOWED_TELEGRAM_USER_IDS=%s\nHOME_DIR=%s\nOUTPUT_FORMAT=%s\nCOMMAND_TIMEOUT=10\nMAX_OUTPUT_LINES=50\nMAX_OUTPUT_BYTES=3800\nLOG_DIR=%s\n' \
+        "${input_token}" "${input_ids}" "${input_home}" "${input_format}" "${LOG_DIR}" > "${tmpfile}"
 
     local write_ok=false
     if run_as_root cp "${tmpfile}" "${ENV_FILE}" 2>/dev/null; then

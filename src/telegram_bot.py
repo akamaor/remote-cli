@@ -5,10 +5,9 @@ Design notes:
 - Outbound long-polling only — no inbound ports required.
 - Unauthorized user IDs are silently dropped (no reply = no bot fingerprinting).
 - Private DMs only — group chats rejected.
-- Session state tracks cwd across messages so cd works naturally.
-- Shortcut commands (/ls, /df, /ps …) are registered with the Bot API so they
-  appear in Telegram's / command picker.
-- All output is HTML-escaped before sending.
+- Session tracks cwd and output format across messages.
+- /format lets you switch display style on the fly.
+- cd ~ uses HOME_DIR from .env so you land in your actual home directory.
 """
 
 import html
@@ -18,67 +17,72 @@ import platform
 import time
 
 import telebot
-from telebot.types import BotCommand, Message
+from telebot.types import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from .config import Config
 from .executor import execute, ExecutionResult
+from .interactive import InteractiveShell
 from .security import is_authorized, is_interactive_command
 
 # ---------------------------------------------------------------------------
+# Output formats
+# ---------------------------------------------------------------------------
+_FORMATS = {
+    "minimal":  "Raw output only — cleanest for copy-paste",
+    "standard": "📁 cwd header + output + exit code  (default)",
+    "compact":  "📁 cwd and status on one header line, then output",
+    "verbose":  "🖥 hostname + 📁 cwd + echoed command + output + timing",
+    "styled":   "🟢/🔴 emoji status + bold text — modern look",
+    "rich":     "━━ border header with hostname, cwd, and command",
+}
+
+# ---------------------------------------------------------------------------
 # Shortcut commands — appear in the Telegram "/" command picker.
-# Format: "name": ("shell command", "picker description")
-# shell=False is enforced — no pipes, no redirection operators.
-# Long output is truncated to MAX_OUTPUT_LINES by the executor.
+# "name": ("shell command", "picker description")
+# shell=False is enforced — no pipes or redirections here.
 # ---------------------------------------------------------------------------
 _SHORTCUTS: dict = {
-    # ── System ──────────────────────────────────────────────────────────────
+    # System
     "sysinfo":     ("uname -a",                                                         "OS and kernel version"),
     "hostname":    ("hostname -f",                                                      "Full hostname"),
     "cpu":         ("lscpu",                                                            "CPU architecture and details"),
     "uptime":      ("uptime",                                                           "Uptime and load average"),
     "whoami":      ("id",                                                               "Current user and groups"),
     "env":         ("env",                                                              "Environment variables"),
-
-    # ── Filesystem ──────────────────────────────────────────────────────────
+    # Filesystem
     "ls":          ("ls -la",                                                           "List files in current directory"),
-    "df":          ("df -h",                                                            "Disk space (summary)"),
-    "disk":        ("df -h --output=source,size,used,avail,pcent,target",               "Disk usage (full table)"),
+    "df":          ("df -h",                                                            "Disk space summary"),
+    "disk":        ("df -h --output=source,size,used,avail,pcent,target",               "Disk usage full table"),
     "du":          ("du -sh /home /var /tmp /opt /root",                                "Directory sizes"),
     "inodes":      ("df -i",                                                            "Inode usage per filesystem"),
-
-    # ── Memory / CPU ────────────────────────────────────────────────────────
+    # Memory / CPU
     "free":        ("free -h",                                                          "RAM and swap usage"),
     "ps":          ("ps aux --sort=-%cpu",                                              "All processes sorted by CPU"),
     "top5cpu":     ("ps axo pid,user,%cpu,%mem,comm --sort=-%cpu",                      "Top processes by CPU"),
     "top5mem":     ("ps axo pid,user,%cpu,%mem,comm --sort=-%mem",                      "Top processes by memory"),
     "vmstat":      ("vmstat -s",                                                        "Virtual memory statistics"),
-
-    # ── Network ─────────────────────────────────────────────────────────────
+    # Network
     "ip":          ("ip -br addr",                                                      "Network interfaces and IPs"),
     "routes":      ("ip route",                                                         "Routing table"),
     "netstat":     ("ss -tulnp",                                                        "Listening ports and services"),
     "connections": ("ss -tp",                                                           "Active TCP connections"),
     "dns":         ("cat /etc/resolv.conf",                                             "DNS resolver config"),
-
-    # ── Services ────────────────────────────────────────────────────────────
+    # Services
     "services":    ("systemctl list-units --type=service --state=running --no-pager",   "Running systemd services"),
     "failed":      ("systemctl --failed --no-pager",                                    "Failed systemd services"),
     "timers":      ("systemctl list-timers --no-pager",                                 "Scheduled systemd timers"),
-    "botstatus":   ("sudo systemctl status remote-cli --no-pager",                      "Remote CLI service status"),
-
-    # ── Logs ────────────────────────────────────────────────────────────────
+    "rc_status":   ("sudo systemctl status remote-cli --no-pager",                      "Remote CLI service status"),
+    # Logs
     "logs":        ("journalctl -n 40 --no-pager",                                      "Last 40 journal entries"),
     "errors":      ("journalctl -p err -n 20 --no-pager",                               "Last 20 error-level events"),
-    "auth":        ("journalctl -u sshd -n 20 --no-pager",                              "Last 20 SSH/auth events"),
-    "botlogs":     ("journalctl -u remote-cli -n 30 --no-pager",                        "Last 30 bot log entries"),
-
-    # ── Users / Security ────────────────────────────────────────────────────
+    "auth":        ("journalctl -u sshd -n 20 --no-pager",                              "Last 20 SSH auth events"),
+    "rc_logs":     ("journalctl -u remote-cli -n 30 --no-pager",                        "Last 30 bot log entries"),
+    # Users / Security
     "who":         ("who",                                                              "Currently logged-in users"),
     "last":        ("last -n 10",                                                       "Last 10 logins"),
     "users":       ("cut -d: -f1 /etc/passwd",                                         "All local user accounts"),
     "sudoers":     ("cat /etc/sudoers.d/chatcli",                                       "Current bot sudo allowlist"),
-
-    # ── Packages ────────────────────────────────────────────────────────────
+    # Packages
     "updates":     ("apt list --upgradable",                                            "Available package updates"),
     "installed":   ("dpkg -l",                                                          "All installed packages"),
 }
@@ -89,48 +93,52 @@ Type any shell command as a plain message to execute it.
 
 <b>Navigation</b>
 <code>cd /path</code>  — change directory (persists across messages)
-<code>cd ..</code>     — go up one level  |  <code>cd</code> — back to /
+<code>cd ..</code>     — up one level  |  <code>cd ~</code> — your home dir  |  <code>cd</code> — root /
 
 <b>Admin commands</b>
 Prefix with <code>sudo</code> for elevated access
 e.g. <code>sudo chmod 755 /etc/myfile</code>
 
-<b>System</b>
-/sysinfo /hostname /cpu /uptime /whoami /env
+<b>─── Remote CLI controls  (rc_ prefix) ───</b>
+/rc_style    — change output style  (tap buttons to pick)
+/rc_shell    — start interactive bash session (stdin enabled)
+/rc_exit     — close interactive shell
+/rc_ping     — latency + host check
+/rc_pwd      — current working directory
+/rc_status   — remote-cli service status
+/rc_logs     — last 30 bot log entries
+/rc_help     — this help message
 
-<b>Filesystem</b>
-/ls /df /disk /du /inodes
+<code>/rc_style minimal</code>   raw output only
+<code>/rc_style standard</code>  cwd + output + exit code  (default)
+<code>/rc_style compact</code>   single header, then output
+<code>/rc_style verbose</code>   hostname + cwd + echoed command + timing
+<code>/rc_style styled</code>    🟢/🔴 emoji status + bold text
+<code>/rc_style rich</code>      ━━ border header with hostname and cwd
 
-<b>Memory &amp; CPU</b>
-/free /ps /top5cpu /top5mem /vmstat
-
-<b>Network</b>
-/ip /routes /netstat /connections /dns
-
-<b>Services</b>
-/services /failed /timers /botstatus
-
-<b>Logs</b>
-/logs /errors /auth /botlogs
-
-<b>Users &amp; Security</b>
-/who /last /users /sudoers
-
-<b>Packages</b>
-/updates /installed
-
-<b>Utility</b>
-/ping — latency check  |  /pwd — current dir  |  /help — this message
+<b>─── System shortcuts ───</b>
+<b>System</b>  /sysinfo /hostname /cpu /uptime /whoami /env
+<b>Filesystem</b>  /ls /df /disk /du /inodes
+<b>Memory &amp; CPU</b>  /free /ps /top5cpu /top5mem /vmstat
+<b>Network</b>  /ip /routes /netstat /connections /dns
+<b>Services</b>  /services /failed /timers
+<b>Logs</b>  /logs /errors /auth
+<b>Users</b>  /who /last /users /sudoers
+<b>Packages</b>  /updates /installed
 """
 
-# Commands registered with the Telegram Bot API (appear in the / picker).
-# Telegram description limit: 256 chars. Command name limit: 32 chars, lowercase.
+# Commands registered with Telegram (appear in the / picker)
 _BOT_COMMANDS = [
-    # Utility
-    BotCommand("help",        "Help and usage guide"),
-    BotCommand("ping",        "Latency and host check"),
-    BotCommand("pwd",         "Show current directory"),
-    # System
+    # ── Remote CLI controls (rc_ prefix) ──
+    BotCommand("rc_help",     "Help and usage guide"),
+    BotCommand("rc_ping",     "Latency and host check"),
+    BotCommand("rc_pwd",      "Show current working directory"),
+    BotCommand("rc_style",    "Change output display style"),
+    BotCommand("rc_shell",    "Start interactive bash session (stdin enabled)"),
+    BotCommand("rc_exit",     "Close interactive shell session"),
+    BotCommand("rc_status",   "Remote CLI service status"),
+    BotCommand("rc_logs",     "Last 30 remote CLI log entries"),
+    # ── System shortcuts ──
     BotCommand("sysinfo",     "OS and kernel version"),
     BotCommand("hostname",    "Full hostname"),
     BotCommand("cpu",         "CPU architecture and details"),
@@ -159,12 +167,10 @@ _BOT_COMMANDS = [
     BotCommand("services",    "Running systemd services"),
     BotCommand("failed",      "Failed systemd services"),
     BotCommand("timers",      "Scheduled systemd timers"),
-    BotCommand("botstatus",   "Remote CLI service status"),
     # Logs
     BotCommand("logs",        "Last 40 journal entries"),
     BotCommand("errors",      "Last 20 error-level events"),
     BotCommand("auth",        "Last 20 SSH auth events"),
-    BotCommand("botlogs",     "Last 30 bot log entries"),
     # Users / Security
     BotCommand("who",         "Currently logged-in users"),
     BotCommand("last",        "Last 10 logins"),
@@ -188,11 +194,15 @@ def build_bot(
     bot = telebot.TeleBot(config.telegram_bot_token, parse_mode=None)
 
     # Session state — persists for the lifetime of this process.
-    # Single authorised user, so no concurrency concern.
-    session = {"cwd": "/"}
+    # Single authorised user, no concurrency concern.
+    session = {
+        "cwd":   "/",
+        "fmt":   config.output_format,  # changeable at runtime with /format
+        "shell": None,                  # InteractiveShell instance, or None
+    }
 
-    # ---- /ping ----
-    @bot.message_handler(commands=["ping"])
+    # ---- /rc_ping ----
+    @bot.message_handler(commands=["rc_ping"])
     def handle_ping(message: Message) -> None:
         if not _check_access(message, config, audit_logger):
             return
@@ -201,12 +211,13 @@ def build_bot(
             message,
             f"<b>Pong</b>  |  {latency_ms:.0f} ms  |  "
             f"<code>{html.escape(platform.node())}</code>  |  "
-            f"cwd: <code>{html.escape(session['cwd'])}</code>",
+            f"📁 <code>{html.escape(session['cwd'])}</code>  |  "
+            f"fmt: <code>{session['fmt']}</code>",
             parse_mode="HTML",
         )
 
-    # ---- /pwd ----
-    @bot.message_handler(commands=["pwd"])
+    # ---- /rc_pwd ----
+    @bot.message_handler(commands=["rc_pwd"])
     def handle_pwd(message: Message) -> None:
         if not _check_access(message, config, audit_logger):
             return
@@ -216,8 +227,121 @@ def build_bot(
             parse_mode="HTML",
         )
 
-    # ---- /help, /start ----
-    @bot.message_handler(commands=["help", "start"])
+    # ---- /rc_style [name] ----
+    @bot.message_handler(commands=["rc_style"])
+    def handle_format(message: Message) -> None:
+        if not _check_access(message, config, audit_logger):
+            return
+
+        parts = (message.text or "").strip().split()
+
+        # /format <name> — switch directly via text command
+        if len(parts) > 1:
+            chosen = parts[1].lower()
+            if chosen not in _FORMATS:
+                options = "  ".join(f"<code>{k}</code>" for k in _FORMATS)
+                bot.reply_to(
+                    message,
+                    f"Unknown format <code>{html.escape(chosen)}</code>\nOptions: {options}",
+                    parse_mode="HTML",
+                )
+                return
+            session["fmt"] = chosen
+            bot.reply_to(
+                message,
+                f"Format set to <code>{chosen}</code>  —  {_FORMATS[chosen]}\n\n"
+                f"{_format_example(chosen)}",
+                parse_mode="HTML",
+            )
+            return
+
+        # /format — show picker with inline buttons
+        bot.reply_to(
+            message,
+            _format_picker_text(session["fmt"]),
+            parse_mode="HTML",
+            reply_markup=_format_keyboard(session["fmt"]),
+        )
+
+    # ---- Inline keyboard callbacks (format picker buttons) ----
+    @bot.callback_query_handler(func=lambda call: call.data.startswith("fmt:"))
+    def handle_format_callback(call) -> None:
+        user_id = call.from_user.id
+        if not is_authorized(user_id, config.allowed_user_ids):
+            bot.answer_callback_query(call.id, "Not authorised.")
+            return
+
+        chosen = call.data[4:]  # strip "fmt:" prefix
+        if chosen not in _FORMATS:
+            bot.answer_callback_query(call.id, "Unknown format.")
+            return
+
+        session["fmt"] = chosen
+        app_logger.info("FORMAT_CHANGE | user_id=%d | fmt=%s", user_id, chosen)
+
+        # Update the picker message in-place with the new selection highlighted
+        try:
+            bot.edit_message_text(
+                _format_picker_text(chosen),
+                chat_id=call.message.chat.id,
+                message_id=call.message.message_id,
+                parse_mode="HTML",
+                reply_markup=_format_keyboard(chosen),
+            )
+        except Exception:
+            pass  # message unchanged — silently ignore (e.g. same format re-tapped)
+
+        bot.answer_callback_query(call.id, f"✅ {chosen}")
+
+    # ---- /rc_shell [exit|kill] ----
+    @bot.message_handler(commands=["rc_shell"])
+    def handle_shell(message: Message) -> None:
+        if not _check_access(message, config, audit_logger):
+            return
+        parts = (message.text or "").strip().split(None, 1)
+        sub = parts[1].lower() if len(parts) > 1 else ""
+
+        if sub in ("exit", "stop", "close", "quit"):
+            _close_shell(session, bot, message)
+            return
+
+        if session["shell"] is not None and session["shell"].is_alive():
+            bot.reply_to(
+                message,
+                "🖥 Shell session already active.\n"
+                "Type commands normally — they go to bash.\n"
+                "Send <code>exit</code> or /exit to end.",
+                parse_mode="HTML",
+            )
+            return
+
+        # Start a new shell
+        try:
+            session["shell"] = InteractiveShell(cwd=session["cwd"])
+        except Exception as exc:
+            bot.reply_to(message, f"❌ Could not start shell: {html.escape(str(exc))}", parse_mode="HTML")
+            return
+
+        app_logger.info("SHELL_START | user_id=%d | cwd=%r", message.from_user.id, session["cwd"])
+        bot.reply_to(
+            message,
+            "🖥 <b>Interactive shell started</b>\n\n"
+            "Type any command — stdin flows directly to <code>bash</code>.\n"
+            "Responses to prompts (y/n, REPLs, etc.) work too.\n\n"
+            f"📁 <code>{html.escape(session['cwd'])}</code>\n\n"
+            "Send <code>exit</code> or /rc_exit to close the session.",
+            parse_mode="HTML",
+        )
+
+    # ---- /rc_exit — close interactive shell ----
+    @bot.message_handler(commands=["rc_exit"])
+    def handle_exit(message: Message) -> None:
+        if not _check_access(message, config, audit_logger):
+            return
+        _close_shell(session, bot, message)
+
+    # ---- /rc_help, /start ----
+    @bot.message_handler(commands=["rc_help", "start"])
     def handle_help(message: Message) -> None:
         if not _check_access(message, config, audit_logger):
             return
@@ -226,11 +350,11 @@ def build_bot(
     # ---- Shortcut commands (/ls, /df, /ps, …) ----
     for _cmd_name, (_shell_cmd, _) in _SHORTCUTS.items():
         _handler = _make_shortcut_handler(
-            bot, _shell_cmd, session, config, app_logger, audit_logger
+            bot, _shell_cmd, _cmd_name, session, config, app_logger, audit_logger
         )
         bot.message_handler(commands=[_cmd_name])(_handler)
 
-    # ---- All other text → shell execution ----
+    # ---- All other text → interactive shell or one-shot execution ----
     @bot.message_handler(func=lambda m: True, content_types=["text"])
     def handle_command(message: Message) -> None:
         if not _check_access(message, config, audit_logger):
@@ -243,16 +367,42 @@ def build_bot(
             bot.reply_to(message, "Send a shell command, or /help for usage.")
             return
 
+        # ── Interactive shell mode ────────────────────────────────────
+        sh = session.get("shell")
+        if sh is not None:
+            if not sh.is_alive():
+                session["shell"] = None
+                bot.reply_to(message, "⚠️ Shell session ended unexpectedly. Switched to normal mode.")
+            else:
+                # "exit" typed as plain text closes the session cleanly
+                if raw.lower() in ("exit", "exit()", "quit", "quit()"):
+                    _close_shell(session, bot, message)
+                    return
+                bot.send_chat_action(message.chat.id, "typing")
+                app_logger.info("SHELL_INPUT | user_id=%d | input=%r", user_id, raw[:200])
+                output = sh.send(raw)
+                if not sh.is_alive():
+                    session["shell"] = None
+                    footer = "\n\n<i>Shell session ended.</i>"
+                else:
+                    footer = ""
+                reply = (f"<pre>{html.escape(output)}</pre>" if output else "<i>(no output)</i>") + footer
+                try:
+                    bot.reply_to(message, reply, parse_mode="HTML")
+                except Exception:
+                    bot.reply_to(message, output or "(no output)")
+                return
+
+        # ── Normal one-shot mode ──────────────────────────────────────
         # Handle cd (shell builtin — cannot be exec'd as a subprocess)
         first_token = raw.split()[0].split("/")[-1].lower() if raw.split() else ""
         if first_token == "cd":
-            new_cwd, err = _resolve_cd(raw, session["cwd"])
+            new_cwd, err = _resolve_cd(raw, session["cwd"], config.home_dir)
             session["cwd"] = new_cwd
-            reply = (
-                f"<code>{html.escape(err)}\n📁 {html.escape(session['cwd'])}</code>"
-                if err else
-                f"<code>📁 {html.escape(session['cwd'])}</code>"
-            )
+            if err:
+                reply = f"<code>{html.escape(err)}</code>\n<code>📁 {html.escape(session['cwd'])}</code>"
+            else:
+                reply = f"<code>📁 {html.escape(session['cwd'])}</code>"
             bot.reply_to(message, reply, parse_mode="HTML")
             audit_logger.info("CD | user_id=%d | new_cwd=%r", user_id, session["cwd"])
             return
@@ -284,12 +434,12 @@ def build_bot(
             session["cwd"] = "/"
 
         _audit(audit_logger, user_id, result)
-        _send_reply(bot, message, result, config.command_timeout, session["cwd"], app_logger)
+        _send_reply(bot, message, result, config.command_timeout, session["cwd"], session["fmt"], raw, app_logger)
 
     # ---- Register command menu with Telegram ----
     try:
         bot.set_my_commands(_BOT_COMMANDS)
-        app_logger.info("Bot command menu registered (%d shortcuts)", len(_BOT_COMMANDS))
+        app_logger.info("Bot command menu registered (%d commands)", len(_BOT_COMMANDS))
     except Exception as exc:
         app_logger.warning("Could not register bot command menu: %s", exc)
 
@@ -300,7 +450,7 @@ def build_bot(
 # Shortcut handler factory — avoids closure-in-loop bugs
 # ---------------------------------------------------------------------------
 
-def _make_shortcut_handler(bot, shell_cmd, session, config, app_logger, audit_logger):
+def _make_shortcut_handler(bot, shell_cmd, label, session, config, app_logger, audit_logger):
     def handler(message: Message) -> None:
         if not _check_access(message, config, audit_logger):
             return
@@ -315,7 +465,7 @@ def _make_shortcut_handler(bot, shell_cmd, session, config, app_logger, audit_lo
             cwd=session["cwd"],
         )
         _audit(audit_logger, user_id, result)
-        _send_reply(bot, message, result, config.command_timeout, session["cwd"], app_logger)
+        _send_reply(bot, message, result, config.command_timeout, session["cwd"], session["fmt"], f"/{label}", app_logger)
     return handler
 
 
@@ -323,16 +473,36 @@ def _make_shortcut_handler(bot, shell_cmd, session, config, app_logger, audit_lo
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _resolve_cd(raw: str, current_cwd: str) -> tuple:
-    """Returns (new_cwd, error_msg). error_msg is '' on success."""
+def _close_shell(session: dict, bot, message) -> None:
+    sh = session.get("shell")
+    if sh is None or not sh.is_alive():
+        session["shell"] = None
+        bot.reply_to(message, "ℹ️ No active shell session.", parse_mode="HTML")
+        return
+    sh.close()
+    session["shell"] = None
+    bot.reply_to(
+        message,
+        "✅ <b>Shell session closed.</b>  Back to normal mode.",
+        parse_mode="HTML",
+    )
+
+
+def _resolve_cd(raw: str, current_cwd: str, home_dir: str) -> tuple:
+    """
+    Returns (new_cwd, error_msg).  error_msg is '' on success.
+    ~ and bare cd both expand to home_dir (set via HOME_DIR in .env).
+    """
     parts = raw.strip().split(None, 1)
-    target = parts[1].strip() if len(parts) > 1 else "/"
+    target = parts[1].strip() if len(parts) > 1 else "~"
 
-    if target in ("~", ""):
-        target = "/"
+    # Expand ~
+    if target == "~" or target == "":
+        target = home_dir
     elif target.startswith("~/"):
-        target = "/" + target[2:]
+        target = os.path.join(home_dir, target[2:])
 
+    # Resolve relative paths
     if not os.path.isabs(target):
         target = os.path.normpath(os.path.join(current_cwd, target))
     else:
@@ -345,7 +515,12 @@ def _resolve_cd(raw: str, current_cwd: str) -> tuple:
     if not os.path.isdir(target):
         return current_cwd, f"cd: {original}: Not a directory"
     if not os.access(target, os.X_OK):
-        return current_cwd, f"cd: {original}: Permission denied"
+        return (
+            current_cwd,
+            f"cd: {original}: Permission denied\n"
+            f"Tip: run  sudo chmod o+x {target}  to allow traversal, "
+            f"then use  sudo ls {target}  to list files",
+        )
 
     return target, ""
 
@@ -391,28 +566,177 @@ def _audit(audit_logger: logging.Logger, user_id: int, result: ExecutionResult) 
         )
 
 
-def _format_reply(result: ExecutionResult, timeout: int, cwd: str = "/") -> str:
-    parts = [f"<code>📁 {html.escape(cwd)}</code>"]
+def _format_reply(result: ExecutionResult, timeout: int, cwd: str, fmt: str, cmd: str = "") -> str:
+    """
+    Four display formats, selectable per-session with /format:
 
+    minimal  — raw output only
+    standard — 📁 cwd + output block + exit/time       (default)
+    compact  — 📁 cwd + status on one line, then output
+    verbose  — 🖥 host  📁 cwd  $ cmd + output + exit/time
+    """
+    has_out = bool(result.output.strip())
+
+    def _status_text() -> str:
+        if result.timed_out:
+            return f"TIMEOUT {timeout}s"
+        if result.error_msg:
+            return "ERR"
+        return "OK" if result.exit_code == 0 else f"FAIL({result.exit_code})"
+
+    def _time_text() -> str:
+        return f"{result.elapsed_seconds:.2f}s"
+
+    # ── minimal ──────────────────────────────────────────────
+    if fmt == "minimal":
+        if result.timed_out:
+            return f"TIMEOUT after {timeout}s — process killed"
+        if result.error_msg:
+            return html.escape(result.error_msg)
+        return f"<pre>{html.escape(result.output)}</pre>" if has_out else "<i>(no output)</i>"
+
+    # ── compact ──────────────────────────────────────────────
+    if fmt == "compact":
+        status = _status_text()
+        header = f"<code>📁 {html.escape(cwd)}  {html.escape(status)}  {_time_text()}</code>"
+        if result.error_msg and not result.timed_out:
+            return f"{header}\n<code>{html.escape(result.error_msg)}</code>"
+        if has_out:
+            return f"{header}\n<pre>{html.escape(result.output)}</pre>"
+        return header
+
+    # ── verbose ──────────────────────────────────────────────
+    if fmt == "verbose":
+        parts = [
+            f"<code>🖥 {html.escape(platform.node())}  📁 {html.escape(cwd)}</code>",
+        ]
+        if cmd:
+            parts.append(f"<code>$ {html.escape(cmd)}</code>")
+        if result.timed_out:
+            parts.append(f"<b>TIMEOUT</b> — exceeded {timeout}s, process killed (SIGKILL).")
+        elif result.error_msg:
+            parts.append(f"<b>ERROR:</b> {html.escape(result.error_msg)}")
+        if has_out:
+            parts.append(f"<pre>{html.escape(result.output)}</pre>")
+        elif not result.timed_out and not result.error_msg:
+            parts.append("<i>(no output)</i>")
+        exit_code = result.exit_code if result.exit_code is not None else "—"
+        parts.append(f"<code>exit {exit_code}  ·  {_time_text()}</code>")
+        return "\n".join(parts)
+
+    # ── styled ───────────────────────────────────────────────
+    if fmt == "styled":
+        if result.timed_out:
+            cwd_icon = "💀"
+            footer   = f"💀 <b>TIMEOUT {timeout}s</b>"
+        elif result.error_msg:
+            cwd_icon = "⚠️"
+            footer   = f"⚠️ <b>ERR</b>  ·  <code>{_time_text()}</code>"
+        elif result.exit_code == 0:
+            cwd_icon = "✅"
+            footer   = f"🟢 <b>OK</b>  ·  <code>{_time_text()}</code>"
+        else:
+            cwd_icon = "❌"
+            footer   = f"🔴 <b>FAIL({result.exit_code})</b>  ·  <code>{_time_text()}</code>"
+
+        parts = [f"{cwd_icon}  📁 <b>{html.escape(cwd)}</b>"]
+        if result.timed_out:
+            parts.append(f"<b>Killed after {timeout}s</b>")
+        elif result.error_msg:
+            parts.append(f"<b>{html.escape(result.error_msg)}</b>")
+        if has_out:
+            parts.append(f"<pre>{html.escape(result.output)}</pre>")
+        elif not result.timed_out and not result.error_msg:
+            parts.append("<i>(no output)</i>")
+        parts.append(footer)
+        return "\n\n".join(parts)
+
+    # ── rich ─────────────────────────────────────────────────
+    if fmt == "rich":
+        SEP = "━━━━━━━━━━━━━━━━━━━━━━"
+        host = html.escape(platform.node())
+        parts = [
+            SEP,
+            f"🖥 <b>{host}</b>  ·  📁 <b>{html.escape(cwd)}</b>",
+        ]
+        if cmd:
+            parts.append(f"▸ <code>{html.escape(cmd)}</code>")
+        parts.append(SEP)
+        if result.timed_out:
+            parts.append(f"💀 <b>Killed after {timeout}s</b>")
+        elif result.error_msg:
+            parts.append(f"⚠️ <b>{html.escape(result.error_msg)}</b>")
+        if has_out:
+            parts.append(f"<pre>{html.escape(result.output)}</pre>")
+        elif not result.timed_out and not result.error_msg:
+            parts.append("<i>(no output)</i>")
+        if result.timed_out:
+            footer = "💀 <b>TIMEOUT</b>"
+        elif result.error_msg:
+            footer = f"⚠️ <b>ERR</b>  ·  ⏱ <code>{_time_text()}</code>"
+        elif result.exit_code == 0:
+            footer = f"✅ <b>OK</b>  ·  ⏱ <code>{_time_text()}</code>"
+        else:
+            footer = f"❌ <b>FAIL({result.exit_code})</b>  ·  ⏱ <code>{_time_text()}</code>"
+        parts.append(footer)
+        return "\n".join(parts)
+
+    # ── standard (default) ───────────────────────────────────
+    parts = [f"<code>📁 {html.escape(cwd)}</code>"]
     if result.timed_out:
         parts.append(f"<b>TIMEOUT</b> — exceeded {timeout}s, process killed (SIGKILL).")
     elif result.error_msg:
         parts.append(f"<b>ERROR:</b> {html.escape(result.error_msg)}")
-
-    if result.output.strip():
+    if has_out:
         parts.append(f"<pre>{html.escape(result.output)}</pre>")
     elif not result.timed_out and not result.error_msg:
         parts.append("<i>(no output)</i>")
-
     if result.exit_code is not None:
         status = "OK" if result.exit_code == 0 else f"FAIL ({result.exit_code})"
-        parts.append(f"<code>{html.escape(status)}  {result.elapsed_seconds:.2f}s</code>")
-
+        parts.append(f"<code>{html.escape(status)}  {_time_text()}</code>")
     return "\n".join(parts)
 
 
-def _send_reply(bot, message, result, timeout, cwd, app_logger) -> None:
-    reply = _format_reply(result, timeout, cwd)
+def _format_picker_text(current: str) -> str:
+    lines = [f"<b>Output format</b>  (current: <code>{current}</code>)\n"]
+    for name, desc in _FORMATS.items():
+        marker = "✓" if name == current else "·"
+        lines.append(f"{marker} <b>{name}</b>  —  {desc}")
+    lines.append("\nTap a button to switch:")
+    return "\n".join(lines)
+
+
+def _format_keyboard(current: str) -> InlineKeyboardMarkup:
+    """Two-column inline keyboard with the active format marked."""
+    names = list(_FORMATS.keys())
+    rows = []
+    for i in range(0, len(names), 2):
+        row = []
+        for name in names[i:i + 2]:
+            label = f"✓ {name}" if name == current else name
+            row.append(InlineKeyboardButton(label, callback_data=f"fmt:{name}"))
+        rows.append(row)
+    kb = InlineKeyboardMarkup()
+    for row in rows:
+        kb.add(*row)
+    return kb
+
+
+def _format_example(fmt: str) -> str:
+    """Short preview shown after switching format."""
+    examples = {
+        "minimal":  "<pre>total 48\ndrwxr-xr-x  5 maor maor  4096 Jun 21</pre>",
+        "standard": "<code>📁 /home/maor</code>\n<pre>total 48\n...</pre>\n<code>OK  0.02s</code>",
+        "compact":  "<code>📁 /home/maor  OK  0.02s</code>\n<pre>total 48\n...</pre>",
+        "verbose":  "<code>🖥 myhost  📁 /home/maor</code>\n<code>$ ls -la</code>\n<pre>total 48\n...</pre>\n<code>exit 0  ·  0.02s</code>",
+        "styled":   "✅  📁 <b>/home/maor</b>\n\n<pre>total 48\n...</pre>\n\n🟢 <b>OK</b>  ·  <code>0.02s</code>",
+        "rich":     "━━━━━━━━━━━━━━━━━━━━━━\n🖥 <b>myhost</b>  ·  📁 <b>/home/maor</b>\n▸ <code>ls -la</code>\n━━━━━━━━━━━━━━━━━━━━━━\n<pre>total 48\n...</pre>\n✅ <b>OK</b>  ·  ⏱ <code>0.02s</code>",
+    }
+    return f"<b>Preview:</b>\n{examples.get(fmt, '')}"
+
+
+def _send_reply(bot, message, result, timeout, cwd, fmt, cmd, app_logger) -> None:
+    reply = _format_reply(result, timeout, cwd, fmt, cmd)
     try:
         bot.reply_to(message, reply, parse_mode="HTML")
     except Exception as exc:

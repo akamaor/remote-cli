@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+_VALID_FORMATS = {"minimal", "standard", "verbose", "compact", "styled", "rich"}
+
 
 @dataclass(frozen=True)
 class Config:
@@ -15,6 +17,8 @@ class Config:
     command_timeout: int
     max_output_lines: int
     max_output_bytes: int
+    output_format: str   # minimal | standard | compact | verbose | styled | rich
+    home_dir: str        # what ~ expands to in cd commands
 
 
 def load_config() -> Config:
@@ -39,7 +43,7 @@ def load_config() -> Config:
     log_dir = os.environ.get("LOG_DIR", "/var/log/remote-cli").strip()
 
     try:
-        command_timeout = int(os.environ.get("COMMAND_TIMEOUT", "10"))
+        command_timeout  = int(os.environ.get("COMMAND_TIMEOUT",  "10"))
         max_output_lines = int(os.environ.get("MAX_OUTPUT_LINES", "50"))
         max_output_bytes = int(os.environ.get("MAX_OUTPUT_BYTES", "3800"))
     except ValueError:
@@ -48,6 +52,12 @@ def load_config() -> Config:
     if command_timeout < 1 or command_timeout > 300:
         raise ValueError("COMMAND_TIMEOUT must be between 1 and 300 seconds")
 
+    output_format = os.environ.get("OUTPUT_FORMAT", "standard").strip().lower()
+    if output_format not in _VALID_FORMATS:
+        raise ValueError(f"OUTPUT_FORMAT must be one of: {', '.join(sorted(_VALID_FORMATS))}")
+
+    home_dir = os.environ.get("HOME_DIR", "/root").strip() or "/root"
+
     return Config(
         telegram_bot_token=token,
         allowed_user_ids=allowed_ids,
@@ -55,4 +65,6 @@ def load_config() -> Config:
         command_timeout=command_timeout,
         max_output_lines=max_output_lines,
         max_output_bytes=max_output_bytes,
+        output_format=output_format,
+        home_dir=home_dir,
     )
