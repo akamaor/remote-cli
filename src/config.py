@@ -49,8 +49,8 @@ def load_config() -> Config:
     except ValueError:
         raise ValueError("COMMAND_TIMEOUT, MAX_OUTPUT_LINES, MAX_OUTPUT_BYTES must be integers")
 
-    if command_timeout < 1 or command_timeout > 300:
-        raise ValueError("COMMAND_TIMEOUT must be between 1 and 300 seconds")
+    if command_timeout < 1 or command_timeout > 3600:
+        raise ValueError("COMMAND_TIMEOUT must be between 1 and 3600 seconds")
 
     output_format = os.environ.get("OUTPUT_FORMAT", "standard").strip().lower()
     if output_format not in _VALID_FORMATS:

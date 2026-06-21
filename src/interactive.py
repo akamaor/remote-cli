@@ -30,8 +30,8 @@ _ANSI = re.compile(
 class InteractiveShell:
     """Persistent bash session over a PTY."""
 
-    QUIET_THRESHOLD = 0.5   # seconds of silence → command done
-    MAX_TIMEOUT     = 10.0  # absolute ceiling per send()
+    QUIET_THRESHOLD = 0.5    # seconds of silence → command done
+    MAX_TIMEOUT     = 120.0  # absolute ceiling per send()
 
     def __init__(self, cwd: str = "/"):
         self.cwd = cwd

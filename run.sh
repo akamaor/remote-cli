@@ -335,20 +335,21 @@ _wizard_config() {
     echo ""
 
     # ---- Read current values (sudo -n = silent, uses cached session) ----
-    local current_token="" current_ids="" current_home="" current_format=""
+    local current_token="" current_ids="" current_home="" current_format="" current_extra_path=""
     if [[ -f "${ENV_FILE}" ]]; then
         local existing
         existing=$(cat "${ENV_FILE}" 2>/dev/null || sudo -n cat "${ENV_FILE}" 2>/dev/null || true)
-        current_token=$(echo "${existing}"   | grep '^TELEGRAM_BOT_TOKEN='           | cut -d= -f2-)
-        current_ids=$(echo "${existing}"     | grep '^ALLOWED_TELEGRAM_USER_IDS='    | cut -d= -f2-)
-        current_home=$(echo "${existing}"    | grep '^HOME_DIR='                     | cut -d= -f2-)
-        current_format=$(echo "${existing}"  | grep '^OUTPUT_FORMAT='                | cut -d= -f2-)
+        current_token=$(echo "${existing}"      | grep '^TELEGRAM_BOT_TOKEN='           | cut -d= -f2-)
+        current_ids=$(echo "${existing}"        | grep '^ALLOWED_TELEGRAM_USER_IDS='    | cut -d= -f2-)
+        current_home=$(echo "${existing}"       | grep '^HOME_DIR='                     | cut -d= -f2-)
+        current_format=$(echo "${existing}"     | grep '^OUTPUT_FORMAT='                | cut -d= -f2-)
+        current_extra_path=$(echo "${existing}" | grep '^EXTRA_PATH='                   | cut -d= -f2-)
     fi
 
     # =========================================================
     # STEP 1 — Bot Token
     # =========================================================
-    echo -e "  ${C}${BOLD}Step 1 of 4${N}  ${W}Telegram Bot Token${N}"
+    echo -e "  ${C}${BOLD}Step 1 of 5${N}  ${W}Telegram Bot Token${N}"
     echo ""
     echo -e "  ${D}How to get your token:${N}"
     echo -e "  ${D}  1. Open Telegram and search for  @BotFather${N}"
@@ -396,7 +397,7 @@ _wizard_config() {
     # =========================================================
     # STEP 2 — Allowed User IDs
     # =========================================================
-    echo -e "  ${C}${BOLD}Step 2 of 4${N}  ${W}Your Telegram User ID${N}"
+    echo -e "  ${C}${BOLD}Step 2 of 5${N}  ${W}Your Telegram User ID${N}"
     echo ""
     echo -e "  ${D}How to find your numeric User ID:${N}"
     echo -e "  ${D}  1. Open Telegram and search for  @userinfobot${N}"
@@ -444,7 +445,7 @@ _wizard_config() {
     # =========================================================
     # STEP 3 — Home Directory
     # =========================================================
-    echo -e "  ${C}${BOLD}Step 3 of 4${N}  ${W}Home Directory${N}"
+    echo -e "  ${C}${BOLD}Step 3 of 5${N}  ${W}Home Directory${N}"
     echo ""
     echo -e "  ${D}This is where  cd ~  and bare  cd  will land you.${N}"
     echo -e "  ${D}Usually /home/your-username  or /root for the root account.${N}"
@@ -484,7 +485,7 @@ _wizard_config() {
     # =========================================================
     # STEP 4 — Output Format
     # =========================================================
-    echo -e "  ${C}${BOLD}Step 4 of 4${N}  ${W}Output Format${N}"
+    echo -e "  ${C}${BOLD}Step 4 of 5${N}  ${W}Output Format${N}"
     echo ""
     echo -e "  ${D}How command results look in your Telegram chat:${N}"
     echo ""
@@ -524,6 +525,41 @@ _wizard_config() {
     echo ""
 
     # =========================================================
+    # STEP 5 — Extra PATH
+    # =========================================================
+    echo -e "  ${C}${BOLD}Step 5 of 5${N}  ${W}Extra PATH${N}"
+    echo ""
+    echo -e "  ${D}Directories prepended to PATH so user-installed tools are found.${N}"
+    echo -e "  ${D}Needed for: claude, npm globals, pip user installs, snap packages.${N}"
+    echo ""
+
+    # Auto-suggest based on the home dir entered in step 3
+    local suggested_extra="${input_home}/.local/bin:/snap/bin"
+
+    if [[ -n "${current_extra_path}" ]]; then
+        echo -e "  Current: ${D}${current_extra_path}${N}"
+        echo -e "  ${D}(press Enter to keep it)${N}"
+    else
+        echo -e "  Suggested: ${D}${suggested_extra}${N}  (press Enter to use this)"
+    fi
+    echo ""
+
+    local input_extra_path=""
+    echo -ne "  ${W}Extra PATH: ${N}"
+    read -r input_extra_path
+
+    if [[ -z "${input_extra_path}" ]]; then
+        input_extra_path="${current_extra_path:-${suggested_extra}}"
+        ok "Using ${input_extra_path}"
+    else
+        ok "Extra PATH set to ${input_extra_path}"
+    fi
+
+    echo ""
+    sep
+    echo ""
+
+    # =========================================================
     # Write .env
     # =========================================================
     echo -e "  ${W}${BOLD}Saving configuration...${N}"
@@ -534,8 +570,8 @@ _wizard_config() {
     local tmpfile
     tmpfile=$(mktemp /tmp/remote-cli-cfg.XXXXXX)
 
-    printf 'TELEGRAM_BOT_TOKEN=%s\nALLOWED_TELEGRAM_USER_IDS=%s\nHOME_DIR=%s\nOUTPUT_FORMAT=%s\nCOMMAND_TIMEOUT=10\nMAX_OUTPUT_LINES=50\nMAX_OUTPUT_BYTES=3800\nLOG_DIR=%s\n' \
-        "${input_token}" "${input_ids}" "${input_home}" "${input_format}" "${LOG_DIR}" > "${tmpfile}"
+    printf 'TELEGRAM_BOT_TOKEN=%s\nALLOWED_TELEGRAM_USER_IDS=%s\nHOME_DIR=%s\nEXTRA_PATH=%s\nOUTPUT_FORMAT=%s\nCOMMAND_TIMEOUT=10\nMAX_OUTPUT_LINES=50\nMAX_OUTPUT_BYTES=3800\nLOG_DIR=%s\n' \
+        "${input_token}" "${input_ids}" "${input_home}" "${input_extra_path}" "${input_format}" "${LOG_DIR}" > "${tmpfile}"
 
     local write_ok=false
     if run_as_root cp "${tmpfile}" "${ENV_FILE}" 2>/dev/null; then
@@ -962,7 +998,7 @@ action_start() {
     fi
 
     echo ""
-    systemctl status "${SERVICE}" --no-pager 2>/dev/null || true
+    run_as_root systemctl status "${SERVICE}" --no-pager 2>/dev/null || true
 
     press_any_key
 }
@@ -1010,24 +1046,28 @@ action_restart() {
     fi
 
     if ! has_config; then
-        warn "Configuration is incomplete. Edit .env (option [7]) before restarting."
-        press_any_key
-        return
+        warn "Configuration may be incomplete — attempting restart anyway."
+        echo ""
     fi
 
     need_root_warning
+    info "Reloading systemd unit files..."
+    run_as_root systemctl daemon-reload
+
     info "Restarting ${SERVICE}..."
-    run_as_root systemctl restart "${SERVICE}" && {
-        sleep 1
+    if run_as_root systemctl restart "${SERVICE}"; then
+        sleep 2
         if systemctl is-active --quiet "${SERVICE}" 2>/dev/null; then
             ok "Service restarted and running"
         else
             err "Service restarted but is not active — check logs (option 6)"
         fi
-    } || err "systemctl restart failed"
+    else
+        err "systemctl restart failed"
+    fi
 
     echo ""
-    systemctl status "${SERVICE}" --no-pager 2>/dev/null || true
+    run_as_root systemctl status "${SERVICE}" --no-pager 2>/dev/null || true
 
     press_any_key
 }

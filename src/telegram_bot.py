@@ -196,7 +196,7 @@ def build_bot(
     # Session state — persists for the lifetime of this process.
     # Single authorised user, no concurrency concern.
     session = {
-        "cwd":     "/",
+        "cwd":     config.home_dir,       # start in home dir, not /
         "fmt":     config.output_format,  # changeable at runtime with /rc_style
         "shell":   None,                  # InteractiveShell instance, or None
         "history": [],                    # per-session command history (max 100)
@@ -422,6 +422,19 @@ def build_bot(
                 lines = "\n".join(f"{i+1:>4}  {html.escape(cmd)}" for i, cmd in enumerate(hist))
                 bot.reply_to(message, f"<pre>{lines}</pre>", parse_mode="HTML")
             return
+
+        # Detect shell operators — shell=False can't handle them; suggest bash -c
+        if any(op in raw for op in ("|", ">>", "&&", "||", ";", "$(")):
+            if not raw.strip().lower().startswith("bash ") and not raw.strip().lower().startswith("sh "):
+                bot.reply_to(
+                    message,
+                    f"⚠️ Shell operators detected (<code>|</code> <code>&gt;&gt;</code> <code>&amp;&amp;</code> etc.)\n\n"
+                    f"Wrap in <code>bash -c</code>:\n"
+                    f"<code>bash -c \"{html.escape(raw)}\"</code>\n\n"
+                    f"Or use /rc_shell for a full interactive session.",
+                    parse_mode="HTML",
+                )
+                return
 
         # Track command in session history (keep last 100)
         session["history"].append(raw)
