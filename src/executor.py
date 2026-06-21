@@ -6,6 +6,15 @@ import time
 from dataclasses import dataclass
 from typing import Optional
 
+# Build a wide PATH so user-installed binaries (claude, npm tools, pip tools, etc.)
+# are visible even when the service runs as a minimal system user.
+_BASE_PATH = os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+_EXTRA_PATH = os.environ.get("EXTRA_PATH", "")
+_FULL_PATH = (_EXTRA_PATH + ":" + _BASE_PATH) if _EXTRA_PATH else _BASE_PATH
+
+# Merged environment passed to every subprocess — inherits everything except PATH
+_PROC_ENV = {**os.environ, "PATH": _FULL_PATH}
+
 
 @dataclass
 class ExecutionResult:
@@ -60,6 +69,7 @@ def execute(
             errors="replace",
             cwd=cwd,                    # honour the session working directory
             preexec_fn=os.setsid,       # new process group → clean SIGKILL of entire tree
+            env=_PROC_ENV,              # wide PATH so user-installed tools are found
         )
     except FileNotFoundError:
         return ExecutionResult(

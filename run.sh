@@ -301,6 +301,7 @@ menu_config() {
         echo -e "  ${M}[3]${N}  Install sudoers       Deploy sudo allowlist template"
         echo -e "  ${M}[4]${N}  Edit sudoers          Modify sudo allowlist"
         echo -e "  ${M}[5]${N}  Show current config   Print .env (token masked)"
+        echo -e "  ${M}[6]${N}  Output style          Change Telegram message format"
         echo ""
         echo -e "  ${D}[0]  Back${N}"
         echo ""
@@ -313,6 +314,7 @@ menu_config() {
             3) _install_sudoers ;;
             4) _edit_sudoers    ;;
             5) _show_env        ;;
+            6) _change_style    ;;
             0|q|Q) return       ;;
             *) echo -e "  ${R}Invalid option.${N}"; sleep 1 ;;
         esac
@@ -561,6 +563,82 @@ _wizard_config() {
         echo -e "  ${D}Return to the main menu and run [1] Install to deploy the service.${N}"
         echo ""
         press_any_key
+    fi
+}
+
+_change_style() {
+    banner
+    echo -e "  ${W}${BOLD}OUTPUT STYLE${N}"
+    echo ""
+
+    local current_format=""
+    if [[ -f "${ENV_FILE}" ]]; then
+        local existing
+        existing=$(cat "${ENV_FILE}" 2>/dev/null || sudo -n cat "${ENV_FILE}" 2>/dev/null || true)
+        current_format=$(echo "${existing}" | grep '^OUTPUT_FORMAT=' | cut -d= -f2-)
+    fi
+
+    echo -e "  ${D}How command results look in your Telegram chat:${N}"
+    echo ""
+    echo -e "  ${W}1${N}  minimal   Raw output only, no decoration"
+    echo -e "  ${W}2${N}  standard  📁 cwd + output + exit code  ${D}(recommended)${N}"
+    echo -e "  ${W}3${N}  compact   📁 cwd and status on one header line"
+    echo -e "  ${W}4${N}  verbose   Hostname + cwd + echoed command + output + timing"
+    echo -e "  ${W}5${N}  styled    🟢/🔴 emoji status icons + bold text"
+    echo -e "  ${W}6${N}  rich      ━━ border header with hostname, cwd, and command"
+    echo ""
+
+    if [[ -n "${current_format}" ]]; then
+        echo -e "  Current: ${C}${BOLD}${current_format}${N}  (press Enter to keep it)"
+    else
+        echo -e "  ${D}(press Enter for  standard)${N}"
+    fi
+    echo ""
+    echo -ne "  ${W}Choose [1-6, Enter=keep]: ${N}"
+    read -r input_fmt_num
+
+    local new_format=""
+    case "${input_fmt_num}" in
+        1) new_format="minimal"  ;;
+        2) new_format="standard" ;;
+        3) new_format="compact"  ;;
+        4) new_format="verbose"  ;;
+        5) new_format="styled"   ;;
+        6) new_format="rich"     ;;
+        "") new_format="${current_format:-standard}" ;;
+        *)  warn "Invalid choice — keeping current"; new_format="${current_format:-standard}" ;;
+    esac
+
+    need_root_warning
+
+    # Update or append OUTPUT_FORMAT in .env
+    if [[ -f "${ENV_FILE}" ]]; then
+        local existing
+        existing=$(cat "${ENV_FILE}" 2>/dev/null || sudo -n cat "${ENV_FILE}" 2>/dev/null || true)
+        if echo "${existing}" | grep -q '^OUTPUT_FORMAT='; then
+            local tmpfile
+            tmpfile=$(mktemp /tmp/remote-cli-style.XXXXXX)
+            echo "${existing}" | sed "s/^OUTPUT_FORMAT=.*/OUTPUT_FORMAT=${new_format}/" > "${tmpfile}"
+            run_as_root cp "${tmpfile}" "${ENV_FILE}"
+            run_as_root chown root:"${SERVICE_USER}" "${ENV_FILE}" 2>/dev/null || true
+            run_as_root chmod 640 "${ENV_FILE}" 2>/dev/null || true
+            rm -f "${tmpfile}"
+        else
+            # OUTPUT_FORMAT not in file yet — append it
+            echo "OUTPUT_FORMAT=${new_format}" | run_as_root tee -a "${ENV_FILE}" > /dev/null
+        fi
+        ok "Style set to '${new_format}'"
+    else
+        err ".env not found — run the Setup Wizard first"
+        press_any_key
+        return
+    fi
+
+    echo ""
+    if is_installed; then
+        echo -ne "  Restart service to apply? ${D}[Y/n]${N}: "
+        read -r answer
+        [[ "${answer}" =~ ^[Nn]$ ]] || action_restart
     fi
 }
 
@@ -978,16 +1056,20 @@ action_update() {
         info "Not a git repository — deploying current source"
     fi
 
-    info "Syncing files to ${APP_DIR}..."
-    run_as_root rsync -a \
-        --exclude='.git' \
-        --exclude='venv' \
-        --exclude='__pycache__' \
-        --exclude='*.pyc' \
-        --exclude='.env' \
-        "${SCRIPT_DIR}/" "${APP_DIR}/" \
-    && ok "Files synced" \
-    || { err "rsync failed"; press_any_key; return; }
+    if [[ "$(realpath "${SCRIPT_DIR}")" != "$(realpath "${APP_DIR}")" ]]; then
+        info "Syncing files from ${SCRIPT_DIR} to ${APP_DIR}..."
+        run_as_root rsync -a \
+            --exclude='.git' \
+            --exclude='venv' \
+            --exclude='__pycache__' \
+            --exclude='*.pyc' \
+            --exclude='.env' \
+            "${SCRIPT_DIR}/" "${APP_DIR}/" \
+        && ok "Files synced" \
+        || { err "rsync failed"; press_any_key; return; }
+    else
+        ok "Running from ${APP_DIR} — files already updated by git pull"
+    fi
 
     # Fix permissions after sync
     run_as_root chown -R root:root "${APP_DIR}"
