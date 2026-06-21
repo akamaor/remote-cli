@@ -1,7 +1,6 @@
 [Unit]
 Description=Secure Remote Chat CLI (Telegram)
 Documentation=https://github.com/akamaor/remote-cli
-# Ensure the network stack is fully up before starting (required for Telegram API)
 After=network-online.target
 Wants=network-online.target
 
@@ -11,79 +10,45 @@ User=chatcli
 Group=chatcli
 WorkingDirectory=/opt/remote-cli
 
-# Load secrets from a root-owned, 600-permissions file so the token
-# never appears in the process table or journald as an argument.
+# Secrets loaded from root-owned file — token never appears in process table
 EnvironmentFile=/opt/remote-cli/.env
 
 ExecStart=/opt/remote-cli/venv/bin/python -m src.main
 
-# Restart automatically on any non-zero exit (network blip, API error, etc.)
 Restart=on-failure
 RestartSec=15
-# Limit restart storms: max 5 restarts in 60 seconds
 StartLimitIntervalSec=60
 StartLimitBurst=5
 
-# Stdout/stderr go to journald — view with: journalctl -u remote-cli -f
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=remote-cli
 
 # -----------------------------------------------------------------------
-# Systemd Security Hardening
-# These directives reduce blast radius if the process is compromised.
+# Security note:
+# This bot is a personal admin tool protected by WireGuard (no open inbound
+# ports) + Telegram user-ID allowlist.  The systemd sandbox is intentionally
+# minimal — heavy restrictions like NoNewPrivileges or ProtectSystem would
+# block sudo, /home access, and arbitrary command execution, which are the
+# whole point of the bot.
 # -----------------------------------------------------------------------
 
-# Prevent the process from gaining new privileges via setuid/sudo inside it
-NoNewPrivileges=yes
-
-# Mount the OS as read-only except for explicit ReadWritePaths below
-ProtectSystem=strict
-
-# The chatcli home dir is /opt/remote-cli; block access to real user homes
-ProtectHome=yes
-
-# Allow writing only to the log directory
-ReadWritePaths=/var/log/remote-cli
-
-# Give the process a private /tmp, isolated from other services
-PrivateTmp=yes
-
-# No access to physical devices
-PrivateDevices=yes
-
-# Prevent modifying kernel tunables
+# Kernel tunables and modules are off-limits for the Python process itself
 ProtectKernelTunables=yes
-
-# Prevent loading/unloading kernel modules
 ProtectKernelModules=yes
-
-# Prevent tampering with cgroup hierarchy
 ProtectControlGroups=yes
 
-# Allow only IPv4, IPv6, and Unix sockets (required for Telegram HTTPS + DNS)
+# Restrict network families to what's needed (Telegram HTTPS + DNS + Unix)
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
-# Prevent creation of new namespaces
-RestrictNamespaces=yes
-
-# Prevent changing execution personality (e.g. 32-bit mode on 64-bit kernel)
-LockPersonality=yes
-
-# Prevent real-time scheduling (no legitimate need for it)
+# No real-time scheduling needed
 RestrictRealtime=yes
 
-# Prevent SUID/SGID bits from taking effect on new files
-RestrictSUIDSGID=yes
+# Prevent the Python process from changing CPU execution personality
+LockPersonality=yes
 
-# Clean up IPC objects on exit
+# Clean up IPC objects when the service stops
 RemoveIPC=yes
-
-# Limit the system calls this process is allowed to make to a safe subset.
-# Uses the @system-service set which covers all typical server/daemon needs
-# including fork, exec, network, file I/O, and signal handling.
-SystemCallFilter=@system-service
-SystemCallErrorNumber=EPERM
 
 [Install]
 WantedBy=multi-user.target

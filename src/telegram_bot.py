@@ -196,9 +196,10 @@ def build_bot(
     # Session state — persists for the lifetime of this process.
     # Single authorised user, no concurrency concern.
     session = {
-        "cwd":   "/",
-        "fmt":   config.output_format,  # changeable at runtime with /format
-        "shell": None,                  # InteractiveShell instance, or None
+        "cwd":     "/",
+        "fmt":     config.output_format,  # changeable at runtime with /rc_style
+        "shell":   None,                  # InteractiveShell instance, or None
+        "history": [],                    # per-session command history (max 100)
     }
 
     # ---- /rc_ping ----
@@ -394,8 +395,9 @@ def build_bot(
                 return
 
         # ── Normal one-shot mode ──────────────────────────────────────
-        # Handle cd (shell builtin — cannot be exec'd as a subprocess)
         first_token = raw.split()[0].split("/")[-1].lower() if raw.split() else ""
+
+        # Handle cd (shell builtin — cannot be exec'd as a subprocess)
         if first_token == "cd":
             new_cwd, err = _resolve_cd(raw, session["cwd"], config.home_dir)
             session["cwd"] = new_cwd
@@ -407,13 +409,29 @@ def build_bot(
             audit_logger.info("CD | user_id=%d | new_cwd=%r", user_id, session["cwd"])
             return
 
+        # Handle history (shell builtin — show per-session command log)
+        if first_token == "history":
+            hist = session["history"]
+            if not hist:
+                bot.reply_to(message, "<i>No commands in session history yet.</i>", parse_mode="HTML")
+            else:
+                lines = "\n".join(f"{i+1:>4}  {html.escape(cmd)}" for i, cmd in enumerate(hist))
+                bot.reply_to(message, f"<pre>{lines}</pre>", parse_mode="HTML")
+            return
+
+        # Track command in session history (keep last 100)
+        session["history"].append(raw)
+        if len(session["history"]) > 100:
+            session["history"].pop(0)
+
         # Block interactive commands (vim, ssh, top, …)
         blocked, blocked_cmd = is_interactive_command(raw)
         if blocked:
             bot.reply_to(
                 message,
                 f"<b>[BLOCKED]</b> <code>{html.escape(blocked_cmd)}</code> requires an "
-                "interactive terminal and cannot run remotely.",
+                "interactive terminal and cannot run remotely.\n"
+                "Use /rc_shell for a full interactive session.",
                 parse_mode="HTML",
             )
             audit_logger.info("BLOCKED_INTERACTIVE | user_id=%d | cmd=%r", user_id, raw[:200])
