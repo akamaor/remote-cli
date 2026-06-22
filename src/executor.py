@@ -90,6 +90,15 @@ def execute(
             error_msg=f"Command not found: {args[0]!r}",
         )
     except PermissionError:
+        # Distinguish: cwd not accessible vs binary not executable
+        if not os.access(cwd, os.X_OK):
+            return ExecutionResult(
+                command=command,
+                exit_code=None,
+                output="",
+                elapsed_seconds=time.monotonic() - t0,
+                error_msg=f"Working directory not accessible: {cwd!r}",
+            )
         return ExecutionResult(
             command=command,
             exit_code=126,

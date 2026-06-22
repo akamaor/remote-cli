@@ -47,9 +47,27 @@ run_as_root() {
     elif command -v sudo &>/dev/null; then
         sudo "$@"
     else
-        err "Root access required but 'sudo' is not available. Run this script as root."
+        err "Root access required. Run the script with: sudo bash run.sh"
         return 1
     fi
+}
+
+# Call at the start of any action that needs root.
+# Validates sudo once (prompts if needed) and caches the session.
+_ensure_sudo() {
+    [[ $EUID -eq 0 ]] && return 0
+    if ! command -v sudo &>/dev/null; then
+        err "sudo not found — run this script as root:  sudo bash run.sh"
+        press_any_key
+        return 1
+    fi
+    if ! sudo -v -p "  $(echo -e "${D}[sudo] password for ${USER}:${N} ")" 2>/dev/null; then
+        err "Could not acquire sudo privileges."
+        err "Run this script as root:  sudo bash run.sh"
+        press_any_key
+        return 1
+    fi
+    return 0
 }
 
 need_root_warning() {
@@ -796,6 +814,8 @@ action_install() {
     echo -e "  ${W}${BOLD}INSTALL${N}"
     echo ""
 
+    _ensure_sudo || return
+
     if is_installed; then
         warn "Application is already installed at ${APP_DIR}."
         echo -ne "  Reinstall / overwrite? ${D}[y/N]${N}: "
@@ -804,7 +824,6 @@ action_install() {
         echo ""
     fi
 
-    need_root_warning
     echo ""
 
     # ---- Step 1: System user ----
@@ -984,7 +1003,7 @@ action_start() {
         [[ "${answer}" =~ ^[Nn]$ ]] || { _edit_env; return; }
     fi
 
-    need_root_warning
+    _ensure_sudo || return
     info "Starting ${SERVICE}..."
     if run_as_root systemctl start "${SERVICE}"; then
         sleep 1  # give the service a moment to fail-fast if misconfigured
@@ -1024,7 +1043,7 @@ action_stop() {
         return
     fi
 
-    need_root_warning
+    _ensure_sudo || return
     info "Stopping ${SERVICE}..."
     run_as_root systemctl stop "${SERVICE}" \
         && ok "Service stopped" \
@@ -1050,7 +1069,7 @@ action_restart() {
         echo ""
     fi
 
-    need_root_warning
+    _ensure_sudo || return
     info "Reloading systemd unit files..."
     run_as_root systemctl daemon-reload
 
@@ -1084,10 +1103,54 @@ action_update() {
         return
     fi
 
-    need_root_warning
+    _ensure_sudo || return
+
+    echo ""
+    echo -e "  ${D}What do you want to do?${N}"
+    echo ""
+    echo -e "  ${C}${BOLD}1${N}  Full update     git pull + deps + restart"
+    echo -e "  ${C}${BOLD}2${N}  Apply config    reload .env and restart only  ${D}(use this after editing .env)${N}"
+    echo ""
+    echo -ne "  Choice ${D}[1/2]${N}: "
+    read -r update_choice
     echo ""
 
-    # Pull latest code if in a git repo
+    if [[ "${update_choice}" == "2" ]]; then
+        # ── Config-reload fast path ───────────────────────────────────
+        info "Reading current config from ${ENV_FILE}..."
+        if [[ -f "${ENV_FILE}" ]]; then
+            local fmt home extra
+            fmt=$(grep  -E '^OUTPUT_FORMAT=' "${ENV_FILE}" 2>/dev/null | cut -d= -f2-)
+            home=$(grep -E '^HOME_DIR='      "${ENV_FILE}" 2>/dev/null | cut -d= -f2-)
+            extra=$(grep -E '^EXTRA_PATH='   "${ENV_FILE}" 2>/dev/null | cut -d= -f2-)
+            echo -e "  ${D}OUTPUT_FORMAT=${N}${W}${fmt:-<not set>}${N}"
+            echo -e "  ${D}HOME_DIR     =${N}${W}${home:-<not set>}${N}"
+            echo -e "  ${D}EXTRA_PATH   =${N}${W}${extra:-<not set>}${N}"
+            echo ""
+        else
+            warn "No .env found at ${ENV_FILE} — restart may fail"
+            echo ""
+        fi
+        info "Reloading systemd unit and restarting service..."
+        run_as_root systemctl daemon-reload
+        if run_as_root systemctl restart "${SERVICE}"; then
+            sleep 2
+            if systemctl is-active --quiet "${SERVICE}" 2>/dev/null; then
+                ok "Service restarted — new .env values are now active"
+            else
+                err "Service not active after restart — check logs (option 6)"
+            fi
+        else
+            err "systemctl restart failed — run option [6] to see logs"
+        fi
+        echo ""
+        sep
+        ok "${BOLD}Config applied!${N}"
+        press_any_key
+        return
+    fi
+
+    # ── Full update path ─────────────────────────────────────────────
     if [[ -d "${SCRIPT_DIR}/.git" ]]; then
         info "Pulling latest code from git..."
         if git -C "${SCRIPT_DIR}" pull; then
@@ -1097,7 +1160,7 @@ action_update() {
         fi
         echo ""
     else
-        info "Not a git repository — deploying current source"
+        info "No git repository found — using current source files"
     fi
 
     if [[ "$(realpath "${SCRIPT_DIR}")" != "$(realpath "${APP_DIR}")" ]]; then
@@ -1112,7 +1175,7 @@ action_update() {
         && ok "Files synced" \
         || { err "rsync failed"; press_any_key; return; }
     else
-        ok "Running from ${APP_DIR} — files already updated by git pull"
+        ok "Running from ${APP_DIR} — no rsync needed"
     fi
 
     # Fix permissions after sync
@@ -1133,14 +1196,16 @@ action_update() {
 
     info "Reloading systemd unit and restarting service..."
     run_as_root systemctl daemon-reload
-    run_as_root systemctl restart "${SERVICE}" && {
-        sleep 1
+    if run_as_root systemctl restart "${SERVICE}"; then
+        sleep 2
         if systemctl is-active --quiet "${SERVICE}" 2>/dev/null; then
             ok "Service restarted successfully"
         else
             err "Service not active after restart — check logs (option 6)"
         fi
-    } || err "Restart failed"
+    else
+        err "Restart failed — run option [6] to see logs"
+    fi
 
     echo ""
     sep
@@ -1167,7 +1232,7 @@ action_uninstall() {
     fi
 
     echo ""
-    need_root_warning
+    _ensure_sudo || return
     echo ""
 
     info "Stopping and disabling service..."

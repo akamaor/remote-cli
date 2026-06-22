@@ -195,8 +195,9 @@ def build_bot(
 
     # Session state — persists for the lifetime of this process.
     # Single authorised user, no concurrency concern.
+    _start_cwd = config.home_dir if os.access(config.home_dir, os.X_OK) else "/"
     session = {
-        "cwd":     config.home_dir,       # start in home dir, not /
+        "cwd":     _start_cwd,            # start in home dir if accessible, else /
         "fmt":     config.output_format,  # changeable at runtime with /rc_style
         "shell":   None,                  # InteractiveShell instance, or None
         "history": [],                    # per-session command history (max 100)
@@ -387,7 +388,7 @@ def build_bot(
                     footer = "\n\n<i>Shell session ended.</i>"
                 else:
                     footer = ""
-                reply = (f"<pre>{html.escape(output)}</pre>" if output else "<i>(no output)</i>") + footer
+                reply = _format_shell_output(output, session["fmt"], raw) + footer
                 try:
                     bot.reply_to(message, reply, parse_mode="HTML")
                 except Exception:
@@ -465,7 +466,10 @@ def build_bot(
             cwd=session["cwd"],
         )
 
-        if result.error_msg and "Working directory no longer exists" in result.error_msg:
+        if result.error_msg and (
+            "Working directory no longer exists" in result.error_msg
+            or "Working directory not accessible" in result.error_msg
+        ):
             session["cwd"] = "/"
 
         _audit(audit_logger, user_id, result)
@@ -723,6 +727,54 @@ def _format_reply(result: ExecutionResult, timeout: int, cwd: str, fmt: str, cmd
         status = "OK" if result.exit_code == 0 else f"FAIL ({result.exit_code})"
         parts.append(f"<code>{html.escape(status)}  {_time_text()}</code>")
     return "\n".join(parts)
+
+
+def _format_shell_output(output: str, fmt: str, cmd: str = "") -> str:
+    """Format interactive shell output using the session's current style."""
+    has_out = bool(output and output.strip())
+
+    if fmt == "minimal":
+        return f"<pre>{html.escape(output)}</pre>" if has_out else "<i>(no output)</i>"
+
+    if fmt == "compact":
+        if has_out:
+            return f"<code>🖥 shell</code>\n<pre>{html.escape(output)}</pre>"
+        return "<code>🖥 shell  (no output)</code>"
+
+    if fmt == "verbose":
+        parts = [f"<code>🖥 {html.escape(platform.node())}</code>"]
+        if cmd:
+            parts.append(f"<code>$ {html.escape(cmd)}</code>")
+        if has_out:
+            parts.append(f"<pre>{html.escape(output)}</pre>")
+        else:
+            parts.append("<i>(no output)</i>")
+        return "\n".join(parts)
+
+    if fmt == "styled":
+        parts = ["🖥  <b>shell</b>"]
+        if has_out:
+            parts.append(f"<pre>{html.escape(output)}</pre>")
+        else:
+            parts.append("<i>(no output)</i>")
+        return "\n\n".join(parts)
+
+    if fmt == "rich":
+        SEP = "━━━━━━━━━━━━━━━━━━━━━━"
+        parts = [SEP, f"🖥 <b>{html.escape(platform.node())}</b>  ·  <b>shell</b>"]
+        if cmd:
+            parts.append(f"▸ <code>{html.escape(cmd)}</code>")
+        parts.append(SEP)
+        if has_out:
+            parts.append(f"<pre>{html.escape(output)}</pre>")
+        else:
+            parts.append("<i>(no output)</i>")
+        return "\n".join(parts)
+
+    # standard (default)
+    if has_out:
+        return f"<code>🖥 shell</code>\n<pre>{html.escape(output)}</pre>"
+    return "<code>🖥 shell</code>\n<i>(no output)</i>"
 
 
 def _format_picker_text(current: str) -> str:
