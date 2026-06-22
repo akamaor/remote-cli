@@ -117,17 +117,33 @@ class PtyShell:
         """
         Send SIGINT to the foreground process and interrupt any pending
         send_line().  Never blocks — safe to call from any thread.
+        Writes the Ctrl+C byte AND signals the foreground process group
+        directly so TUI apps that set raw mode (claude, vim, htop) are
+        also interrupted.
         """
         self._interrupt.set()
         try:
             os.write(self._fd, b'\x03')
         except OSError:
             pass
+        try:
+            fg_pgid = os.tcgetpgrp(self._fd)
+            os.killpg(fg_pgid, signal.SIGINT)
+        except OSError:
+            pass
 
     def send_ctrl_d(self) -> None:
-        """Send EOF (Ctrl+D) to the shell."""
+        """Send EOF (Ctrl+D) to the shell.
+        Also sends SIGTERM to the foreground process group so TUI apps
+        in raw mode (which suppress the EOF byte) are properly terminated.
+        """
         try:
             os.write(self._fd, b'\x04')
+        except OSError:
+            pass
+        try:
+            fg_pgid = os.tcgetpgrp(self._fd)
+            os.killpg(fg_pgid, signal.SIGTERM)
         except OSError:
             pass
 
@@ -135,11 +151,23 @@ class PtyShell:
         """
         Read the shell's actual CWD from /proc.
         Tracks every cd command automatically — no special-casing needed.
+        Falls back to sudo readlink when the shell runs as a different user
+        (e.g. RUN_AS_USER) and the /proc entry is not readable by chatcli.
         """
         try:
             return os.readlink(f'/proc/{self.proc.pid}/cwd')
         except OSError:
-            return 'unknown'
+            pass
+        try:
+            result = subprocess.run(
+                ["sudo", "readlink", f"/proc/{self.proc.pid}/cwd"],
+                capture_output=True, text=True, timeout=2,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                return result.stdout.strip()
+        except Exception:
+            pass
+        return 'unknown'
 
     def status(self) -> dict:
         return {
