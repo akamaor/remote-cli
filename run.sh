@@ -507,12 +507,13 @@ _wizard_config() {
     echo ""
     echo -e "  ${D}How command results look in your Telegram chat:${N}"
     echo ""
-    echo -e "  ${W}1${N}  minimal   Raw output only, no decoration"
-    echo -e "  ${W}2${N}  standard  📁 cwd + output + exit code  ${D}(recommended)${N}"
-    echo -e "  ${W}3${N}  compact   📁 cwd and status on one header line"
-    echo -e "  ${W}4${N}  verbose   Hostname + cwd + echoed command + output + timing"
-    echo -e "  ${W}5${N}  styled    🟢/🔴 emoji status icons + bold text"
-    echo -e "  ${W}6${N}  rich      ━━ border header with hostname, cwd, and command"
+    echo -e "  ${W}1${N}  terminal  user@host:cwd\$ classic shell prompt  ${D}(recommended)${N}"
+    echo -e "  ${W}2${N}  minimal   Raw output only, no decoration"
+    echo -e "  ${W}3${N}  standard  📁 cwd + output + exit code"
+    echo -e "  ${W}4${N}  compact   📁 cwd and status on one header line"
+    echo -e "  ${W}5${N}  verbose   Hostname + cwd + echoed command + output + timing"
+    echo -e "  ${W}6${N}  styled    🟢/🔴 emoji status icons + bold text"
+    echo -e "  ${W}7${N}  rich      ━━ border header with hostname, cwd, and command"
     echo ""
 
     if [[ -n "${current_format}" ]]; then
@@ -523,18 +524,19 @@ _wizard_config() {
     echo ""
 
     local input_fmt_num="" input_format=""
-    echo -ne "  ${W}Choose [1-6, Enter=standard]: ${N}"
+    echo -ne "  ${W}Choose [1-7, Enter=terminal]: ${N}"
     read -r input_fmt_num
 
     case "${input_fmt_num}" in
-        1) input_format="minimal"  ;;
-        2) input_format="standard" ;;
-        3) input_format="compact"  ;;
-        4) input_format="verbose"  ;;
-        5) input_format="styled"   ;;
-        6) input_format="rich"     ;;
-        "") input_format="${current_format:-standard}" ;;
-        *)  warn "Invalid choice — using standard"; input_format="standard" ;;
+        1) input_format="terminal" ;;
+        2) input_format="minimal"  ;;
+        3) input_format="standard" ;;
+        4) input_format="compact"  ;;
+        5) input_format="verbose"  ;;
+        6) input_format="styled"   ;;
+        7) input_format="rich"     ;;
+        "") input_format="${current_format:-terminal}" ;;
+        *)  warn "Invalid choice — using terminal"; input_format="terminal" ;;
     esac
     ok "Format set to '${input_format}'"
 
@@ -638,33 +640,35 @@ _change_style() {
 
     echo -e "  ${D}How command results look in your Telegram chat:${N}"
     echo ""
-    echo -e "  ${W}1${N}  minimal   Raw output only, no decoration"
-    echo -e "  ${W}2${N}  standard  📁 cwd + output + exit code  ${D}(recommended)${N}"
-    echo -e "  ${W}3${N}  compact   📁 cwd and status on one header line"
-    echo -e "  ${W}4${N}  verbose   Hostname + cwd + echoed command + output + timing"
-    echo -e "  ${W}5${N}  styled    🟢/🔴 emoji status icons + bold text"
-    echo -e "  ${W}6${N}  rich      ━━ border header with hostname, cwd, and command"
+    echo -e "  ${W}1${N}  terminal  user@host:cwd\$ classic shell prompt  ${D}(recommended)${N}"
+    echo -e "  ${W}2${N}  minimal   Raw output only, no decoration"
+    echo -e "  ${W}3${N}  standard  📁 cwd + output + exit code"
+    echo -e "  ${W}4${N}  compact   📁 cwd and status on one header line"
+    echo -e "  ${W}5${N}  verbose   Hostname + cwd + echoed command + output + timing"
+    echo -e "  ${W}6${N}  styled    🟢/🔴 emoji status icons + bold text"
+    echo -e "  ${W}7${N}  rich      ━━ border header with hostname, cwd, and command"
     echo ""
 
     if [[ -n "${current_format}" ]]; then
         echo -e "  Current: ${C}${BOLD}${current_format}${N}  (press Enter to keep it)"
     else
-        echo -e "  ${D}(press Enter for  standard)${N}"
+        echo -e "  ${D}(press Enter for  terminal)${N}"
     fi
     echo ""
-    echo -ne "  ${W}Choose [1-6, Enter=keep]: ${N}"
+    echo -ne "  ${W}Choose [1-7, Enter=keep]: ${N}"
     read -r input_fmt_num
 
     local new_format=""
     case "${input_fmt_num}" in
-        1) new_format="minimal"  ;;
-        2) new_format="standard" ;;
-        3) new_format="compact"  ;;
-        4) new_format="verbose"  ;;
-        5) new_format="styled"   ;;
-        6) new_format="rich"     ;;
-        "") new_format="${current_format:-standard}" ;;
-        *)  warn "Invalid choice — keeping current"; new_format="${current_format:-standard}" ;;
+        1) new_format="terminal" ;;
+        2) new_format="minimal"  ;;
+        3) new_format="standard" ;;
+        4) new_format="compact"  ;;
+        5) new_format="verbose"  ;;
+        6) new_format="styled"   ;;
+        7) new_format="rich"     ;;
+        "") new_format="${current_format:-terminal}" ;;
+        *)  warn "Invalid choice — keeping current"; new_format="${current_format:-terminal}" ;;
     esac
 
     need_root_warning

@@ -28,8 +28,9 @@ from .security import is_authorized, is_interactive_command
 # Output formats
 # ---------------------------------------------------------------------------
 _FORMATS = {
+    "terminal": "user@host:cwd$ — classic shell prompt style  (default)",
     "minimal":  "Raw output only — cleanest for copy-paste",
-    "standard": "📁 cwd header + output + exit code  (default)",
+    "standard": "📁 cwd header + output + exit code",
     "compact":  "📁 cwd and status on one header line, then output",
     "verbose":  "🖥 hostname + 📁 cwd + echoed command + output + timing",
     "styled":   "🟢/🔴 emoji status + bold text — modern look",
@@ -109,8 +110,9 @@ e.g. <code>sudo chmod 755 /etc/myfile</code>
 /rc_logs     — last 30 bot log entries
 /rc_help     — this help message
 
+<code>/rc_style terminal</code>  user@host:cwd$ classic shell prompt  (default)
 <code>/rc_style minimal</code>   raw output only
-<code>/rc_style standard</code>  cwd + output + exit code  (default)
+<code>/rc_style standard</code>  cwd + output + exit code
 <code>/rc_style compact</code>   single header, then output
 <code>/rc_style verbose</code>   hostname + cwd + echoed command + timing
 <code>/rc_style styled</code>    🟢/🔴 emoji status + bold text
@@ -196,11 +198,13 @@ def build_bot(
     # Session state — persists for the lifetime of this process.
     # Single authorised user, no concurrency concern.
     _start_cwd = config.home_dir if os.access(config.home_dir, os.X_OK) else "/"
+    _user = os.path.basename(config.home_dir.rstrip("/")) or "root"
     session = {
         "cwd":     _start_cwd,            # start in home dir if accessible, else /
         "fmt":     config.output_format,  # changeable at runtime with /rc_style
         "shell":   None,                  # InteractiveShell instance, or None
         "history": [],                    # per-session command history (max 100)
+        "user":    _user,                 # derived from HOME_DIR for prompt display
     }
 
     # ---- /rc_ping ----
@@ -388,7 +392,7 @@ def build_bot(
                     footer = "\n\n<i>Shell session ended.</i>"
                 else:
                     footer = ""
-                reply = _format_shell_output(output, session["fmt"], raw) + footer
+                reply = _format_shell_output(output, session["fmt"], raw, session["cwd"], session["user"]) + footer
                 try:
                     bot.reply_to(message, reply, parse_mode="HTML")
                 except Exception:
@@ -473,7 +477,7 @@ def build_bot(
             session["cwd"] = "/"
 
         _audit(audit_logger, user_id, result)
-        _send_reply(bot, message, result, config.command_timeout, session["cwd"], session["fmt"], raw, app_logger)
+        _send_reply(bot, message, result, config.command_timeout, session["cwd"], session["fmt"], raw, app_logger, session["user"])
 
     # ---- Register command menu with Telegram ----
     try:
@@ -504,7 +508,7 @@ def _make_shortcut_handler(bot, shell_cmd, label, session, config, app_logger, a
             cwd=session["cwd"],
         )
         _audit(audit_logger, user_id, result)
-        _send_reply(bot, message, result, config.command_timeout, session["cwd"], session["fmt"], f"/{label}", app_logger)
+        _send_reply(bot, message, result, config.command_timeout, session["cwd"], session["fmt"], f"/{label}", app_logger, session["user"])
     return handler
 
 
@@ -598,16 +602,29 @@ def _audit(audit_logger: logging.Logger, user_id: int, result: ExecutionResult) 
         )
 
 
-def _format_reply(result: ExecutionResult, timeout: int, cwd: str, fmt: str, cmd: str = "") -> str:
-    """
-    Four display formats, selectable per-session with /format:
-
-    minimal  — raw output only
-    standard — 📁 cwd + output block + exit/time       (default)
-    compact  — 📁 cwd + status on one line, then output
-    verbose  — 🖥 host  📁 cwd  $ cmd + output + exit/time
-    """
+def _format_reply(result: ExecutionResult, timeout: int, cwd: str, fmt: str, cmd: str = "", user: str = "") -> str:
     has_out = bool(result.output.strip())
+
+    # ── terminal ─────────────────────────────────────────────
+    if fmt == "terminal":
+        _u = user or "user"
+        _h = platform.node()
+        prompt = f"<b>{html.escape(_u)}@{html.escape(_h)}:{html.escape(cwd)}$</b>"
+        if cmd:
+            prompt += f" {html.escape(cmd)}"
+        parts = [prompt]
+        if result.timed_out:
+            parts.append(f"\n\n<i>killed — {timeout}s timeout</i>")
+        elif result.error_msg:
+            parts.append(f"\n\n<i>{html.escape(result.error_msg)}</i>")
+        else:
+            if has_out:
+                parts.append(f"\n\n<pre>{html.escape(result.output)}</pre>")
+            if result.exit_code not in (None, 0):
+                parts.append(f"\n<i>exit {result.exit_code}  ·  {result.elapsed_seconds:.2f}s</i>")
+            elif result.elapsed_seconds > 3.0:
+                parts.append(f"\n<i>{result.elapsed_seconds:.2f}s</i>")
+        return "".join(parts)
 
     def _status_text() -> str:
         if result.timed_out:
@@ -729,9 +746,19 @@ def _format_reply(result: ExecutionResult, timeout: int, cwd: str, fmt: str, cmd
     return "\n".join(parts)
 
 
-def _format_shell_output(output: str, fmt: str, cmd: str = "") -> str:
+def _format_shell_output(output: str, fmt: str, cmd: str = "", cwd: str = "", user: str = "") -> str:
     """Format interactive shell output using the session's current style."""
     has_out = bool(output and output.strip())
+
+    if fmt == "terminal":
+        _u = user or "user"
+        _h = platform.node()
+        prompt = f"<b>{html.escape(_u)}@{html.escape(_h)}:{html.escape(cwd or '~')}$</b>"
+        if cmd:
+            prompt += f" {html.escape(cmd)}"
+        if has_out:
+            return f"{prompt}\n\n<pre>{html.escape(output)}</pre>"
+        return prompt
 
     if fmt == "minimal":
         return f"<pre>{html.escape(output)}</pre>" if has_out else "<i>(no output)</i>"
@@ -805,18 +832,19 @@ def _format_keyboard(current: str) -> InlineKeyboardMarkup:
 def _format_example(fmt: str) -> str:
     """Short preview shown after switching format."""
     examples = {
-        "minimal":  "<pre>total 48\ndrwxr-xr-x  5 maor maor  4096 Jun 21</pre>",
-        "standard": "<code>📁 /home/maor</code>\n<pre>total 48\n...</pre>\n<code>OK  0.02s</code>",
-        "compact":  "<code>📁 /home/maor  OK  0.02s</code>\n<pre>total 48\n...</pre>",
-        "verbose":  "<code>🖥 myhost  📁 /home/maor</code>\n<code>$ ls -la</code>\n<pre>total 48\n...</pre>\n<code>exit 0  ·  0.02s</code>",
+        "terminal": "<b>maor@myhost:/home/maor$</b> ls -la\n\n<pre>total 48\ndrwxr-xr-x  5 maor maor  4096 Jun 22</pre>",
+        "minimal":  "<pre>total 48\ndrwxr-xr-x  5 maor maor  4096 Jun 22</pre>",
+        "standard": "📁 /home/maor\n<pre>total 48\n...</pre>\nOK  0.02s",
+        "compact":  "📁 /home/maor  OK  0.02s\n<pre>total 48\n...</pre>",
+        "verbose":  "🖥 myhost  📁 /home/maor\n$ ls -la\n<pre>total 48\n...</pre>\nexit 0  ·  0.02s",
         "styled":   "✅  📁 <b>/home/maor</b>\n\n<pre>total 48\n...</pre>\n\n🟢 <b>OK</b>  ·  <code>0.02s</code>",
         "rich":     "━━━━━━━━━━━━━━━━━━━━━━\n🖥 <b>myhost</b>  ·  📁 <b>/home/maor</b>\n▸ <code>ls -la</code>\n━━━━━━━━━━━━━━━━━━━━━━\n<pre>total 48\n...</pre>\n✅ <b>OK</b>  ·  ⏱ <code>0.02s</code>",
     }
     return f"<b>Preview:</b>\n{examples.get(fmt, '')}"
 
 
-def _send_reply(bot, message, result, timeout, cwd, fmt, cmd, app_logger) -> None:
-    reply = _format_reply(result, timeout, cwd, fmt, cmd)
+def _send_reply(bot, message, result, timeout, cwd, fmt, cmd, app_logger, user="") -> None:
+    reply = _format_reply(result, timeout, cwd, fmt, cmd, user)
     try:
         bot.reply_to(message, reply, parse_mode="HTML")
     except Exception as exc:

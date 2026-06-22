@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-_VALID_FORMATS = {"minimal", "standard", "verbose", "compact", "styled", "rich"}
+_VALID_FORMATS = {"terminal", "minimal", "standard", "verbose", "compact", "styled", "rich"}
 
 
 @dataclass(frozen=True)
@@ -52,7 +52,7 @@ def load_config() -> Config:
     if command_timeout < 1 or command_timeout > 3600:
         raise ValueError("COMMAND_TIMEOUT must be between 1 and 3600 seconds")
 
-    output_format = os.environ.get("OUTPUT_FORMAT", "standard").strip().lower()
+    output_format = os.environ.get("OUTPUT_FORMAT", "terminal").strip().lower()
     if output_format not in _VALID_FORMATS:
         raise ValueError(f"OUTPUT_FORMAT must be one of: {', '.join(sorted(_VALID_FORMATS))}")
 
