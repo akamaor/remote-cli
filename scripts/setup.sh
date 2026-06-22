@@ -51,6 +51,32 @@ else
     echo "      Created user '${SERVICE_USER}'."
 fi
 
+# Grant chatcli read+execute on the home directory by joining its owning group.
+# Reads HOME_DIR from .env if available; falls back to the invoking user's home.
+_setup_home_dir=""
+for _env_candidate in ".env" "${APP_DIR}/.env"; do
+    if [[ -f "${_env_candidate}" ]]; then
+        _candidate=$(grep '^HOME_DIR=' "${_env_candidate}" 2>/dev/null | cut -d= -f2- | tr -d ' ')
+        [[ -n "${_candidate}" ]] && _setup_home_dir="${_candidate}" && break
+    fi
+done
+[[ -z "${_setup_home_dir}" || ! -d "${_setup_home_dir}" ]] && _setup_home_dir="/home/${SUDO_USER:-${USER}}"
+if [[ -d "${_setup_home_dir}" ]]; then
+    _setup_group=$(stat -c '%G' "${_setup_home_dir}" 2>/dev/null)
+    if [[ -n "${_setup_group}" && "${_setup_group}" != "root" ]]; then
+        if ! id -nG "${SERVICE_USER}" | grep -qw "${_setup_group}"; then
+            usermod -aG "${_setup_group}" "${SERVICE_USER}"
+            echo "      Added '${SERVICE_USER}' to group '${_setup_group}' (grants r-x on ${_setup_home_dir})."
+        else
+            echo "      '${SERVICE_USER}' already in group '${_setup_group}' — skipping."
+        fi
+    else
+        echo "      Could not determine group for '${_setup_home_dir}' — skipping home access grant."
+    fi
+else
+    echo "      Home directory '${_setup_home_dir}' not found — skipping home access grant."
+fi
+
 echo "[2/7] Deploying application to ${APP_DIR}..."
 mkdir -p "${APP_DIR}"
 rsync -a --exclude='.git' --exclude='venv' --exclude='__pycache__' \

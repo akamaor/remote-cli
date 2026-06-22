@@ -36,7 +36,8 @@ _DRAIN_QUIET     = 0.3   # quiet threshold used during drain
 class PtyShell:
     """Persistent bash session backed by a PTY."""
 
-    def __init__(self, shell: str = "/bin/bash", cwd: str = "/", extra_env: Optional[dict] = None):
+    def __init__(self, shell: str = "/bin/bash", cwd: str = "/", extra_env: Optional[dict] = None,
+                 shell_cmd: Optional[list] = None):
         self._shell = shell
         self._started_at = time.monotonic()
         self._last_cmd_at: Optional[float] = None
@@ -52,7 +53,7 @@ class PtyShell:
         self._fd = master_fd
 
         self.proc = subprocess.Popen(
-            [shell],
+            shell_cmd if shell_cmd else [shell],
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,

@@ -38,6 +38,7 @@ import html
 import logging
 import os
 import platform
+import pwd
 import time
 
 import telebot
@@ -631,11 +632,34 @@ def _start_shell(session: dict, config: Config) -> PtyShell:
     base_path = os.environ.get("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
     extra_path = os.environ.get("EXTRA_PATH", "")
     full_path = (extra_path + ":" + base_path) if extra_path else base_path
+    extra_env: dict = {"PATH": full_path}
+
+    shell_cmd = None
+    if config.run_as_user:
+        shell_cmd = ["sudo", "-u", config.run_as_user, "-i", "bash"]
+        try:
+            uid = pwd.getpwnam(config.run_as_user).pw_uid
+            extra_env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{uid}/bus"
+        except KeyError:
+            pass
+
     sh = PtyShell(
         shell=config.default_shell,
         cwd=cwd,
-        extra_env={"PATH": full_path},
+        extra_env=extra_env,
+        shell_cmd=shell_cmd,
     )
+    if config.run_as_user:
+        # Ensure snap and GUI apps can connect to the user's D-Bus / display
+        try:
+            uid = pwd.getpwnam(config.run_as_user).pw_uid
+            sh.send_line(
+                f"export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus"
+                f"; export DISPLAY=${{DISPLAY:-:0}}",
+                timeout=3,
+            )
+        except KeyError:
+            pass
     session["shell"] = sh
     return sh
 
@@ -678,9 +702,10 @@ def _run_pty(bot, message, cmd: str, sh: PtyShell, session: dict, config: Config
     # Apply output size limits (PTY can produce a lot)
     output = _truncate(output, config.max_output_lines, config.max_output_bytes)
 
+    out_preview = output[:400].replace('\n', ' | ') if output else "(no output)"
     audit_logger.info(
-        "PTY_RESULT | user_id=%d | cmd=%r | cwd=%s | output_len=%d",
-        user_id, cmd[:200], cwd, len(output),
+        "PTY_RESULT | user_id=%d | cmd=%r | cwd=%s | output=%s",
+        user_id, cmd[:200], cwd, out_preview,
     )
 
     reply = _format_shell_output(output, session["fmt"], cmd, cwd, session["user"])

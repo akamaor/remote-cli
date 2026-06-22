@@ -76,6 +76,36 @@ need_root_warning() {
     fi
 }
 
+# Grant SERVICE_USER read+execute access to the home directory by joining its group.
+# Reads HOME_DIR from .env if available, falls back to the invoking user's home.
+_grant_home_access() {
+    local home_dir=""
+    if [[ -f "${ENV_FILE}" ]]; then
+        home_dir=$(grep '^HOME_DIR=' "${ENV_FILE}" 2>/dev/null | cut -d= -f2- | tr -d ' ')
+    fi
+    [[ -z "${home_dir}" || ! -d "${home_dir}" ]] && home_dir="/home/${SUDO_USER:-${USER}}"
+
+    if [[ ! -d "${home_dir}" ]]; then
+        warn "Home directory '${home_dir}' not found — skipping group membership"
+        return
+    fi
+
+    local home_group
+    home_group=$(stat -c '%G' "${home_dir}" 2>/dev/null)
+    if [[ -z "${home_group}" || "${home_group}" == "root" ]]; then
+        warn "Could not determine group for '${home_dir}' — skipping"
+        return
+    fi
+
+    if id -nG "${SERVICE_USER}" 2>/dev/null | grep -qw "${home_group}"; then
+        ok "'${SERVICE_USER}' already in group '${home_group}' — skipping"
+    else
+        run_as_root usermod -aG "${home_group}" "${SERVICE_USER}" \
+            && ok "'${SERVICE_USER}' added to group '${home_group}' (grants r-x on ${home_dir})" \
+            || warn "Failed to add '${SERVICE_USER}' to group '${home_group}'"
+    fi
+}
+
 # =============================================================================
 # STATE DETECTION
 # =============================================================================
@@ -353,15 +383,16 @@ _wizard_config() {
     echo ""
 
     # ---- Read current values (sudo -n = silent, uses cached session) ----
-    local current_token="" current_ids="" current_home="" current_format="" current_extra_path=""
+    local current_token="" current_ids="" current_home="" current_format="" current_extra_path="" current_run_as_user=""
     if [[ -f "${ENV_FILE}" ]]; then
         local existing
         existing=$(cat "${ENV_FILE}" 2>/dev/null || sudo -n cat "${ENV_FILE}" 2>/dev/null || true)
-        current_token=$(echo "${existing}"      | grep '^TELEGRAM_BOT_TOKEN='           | cut -d= -f2-)
-        current_ids=$(echo "${existing}"        | grep '^ALLOWED_TELEGRAM_USER_IDS='    | cut -d= -f2-)
-        current_home=$(echo "${existing}"       | grep '^HOME_DIR='                     | cut -d= -f2-)
-        current_format=$(echo "${existing}"     | grep '^OUTPUT_FORMAT='                | cut -d= -f2-)
-        current_extra_path=$(echo "${existing}" | grep '^EXTRA_PATH='                   | cut -d= -f2-)
+        current_token=$(echo "${existing}"        | grep '^TELEGRAM_BOT_TOKEN='           | cut -d= -f2-)
+        current_ids=$(echo "${existing}"          | grep '^ALLOWED_TELEGRAM_USER_IDS='    | cut -d= -f2-)
+        current_home=$(echo "${existing}"         | grep '^HOME_DIR='                     | cut -d= -f2-)
+        current_format=$(echo "${existing}"       | grep '^OUTPUT_FORMAT='                | cut -d= -f2-)
+        current_extra_path=$(echo "${existing}"   | grep '^EXTRA_PATH='                   | cut -d= -f2-)
+        current_run_as_user=$(echo "${existing}"  | grep '^RUN_AS_USER='                  | cut -d= -f2-)
     fi
 
     # =========================================================
@@ -496,6 +527,18 @@ _wizard_config() {
         ok "Home directory set to ${input_home}"
     fi
 
+    # Auto-derive RUN_AS_USER from the home path (e.g. /home/alice → alice)
+    local input_run_as_user=""
+    if [[ "${input_home}" =~ ^/home/([^/]+)$ ]]; then
+        input_run_as_user="${BASH_REMATCH[1]}"
+        if [[ -n "${current_run_as_user}" && "${current_run_as_user}" != "${input_run_as_user}" ]]; then
+            input_run_as_user="${current_run_as_user}"
+        fi
+        ok "RUN_AS_USER set to '${input_run_as_user}' (snap + user tools support)"
+    else
+        input_run_as_user="${current_run_as_user:-}"
+    fi
+
     echo ""
     sep
     echo ""
@@ -590,8 +633,8 @@ _wizard_config() {
     local tmpfile
     tmpfile=$(mktemp /tmp/remote-cli-cfg.XXXXXX)
 
-    printf 'TELEGRAM_BOT_TOKEN=%s\nALLOWED_TELEGRAM_USER_IDS=%s\nHOME_DIR=%s\nEXTRA_PATH=%s\nOUTPUT_FORMAT=%s\nCOMMAND_TIMEOUT=10\nMAX_OUTPUT_LINES=50\nMAX_OUTPUT_BYTES=3800\nLOG_DIR=%s\n' \
-        "${input_token}" "${input_ids}" "${input_home}" "${input_extra_path}" "${input_format}" "${LOG_DIR}" > "${tmpfile}"
+    printf 'TELEGRAM_BOT_TOKEN=%s\nALLOWED_TELEGRAM_USER_IDS=%s\nHOME_DIR=%s\nRUN_AS_USER=%s\nEXTRA_PATH=%s\nOUTPUT_FORMAT=%s\nCOMMAND_TIMEOUT=10\nMAX_OUTPUT_LINES=50\nMAX_OUTPUT_BYTES=3800\nLOG_DIR=%s\n' \
+        "${input_token}" "${input_ids}" "${input_home}" "${input_run_as_user}" "${input_extra_path}" "${input_format}" "${LOG_DIR}" > "${tmpfile}"
 
     local write_ok=false
     if run_as_root cp "${tmpfile}" "${ENV_FILE}" 2>/dev/null; then
@@ -845,6 +888,8 @@ action_install() {
         && ok "User '${SERVICE_USER}' created" \
         || { err "Failed to create user"; press_any_key; return; }
     fi
+    info "         Granting home directory access..."
+    _grant_home_access
 
     # ---- Step 2: Deploy files ----
     info "Step 2/6  Deploying application to ${APP_DIR}..."
@@ -1190,6 +1235,8 @@ action_update() {
     run_as_root chown root:"${SERVICE_USER}" "${ENV_FILE}" 2>/dev/null || true
     run_as_root chmod 640 "${ENV_FILE}" 2>/dev/null || true
     run_as_root chown -R root:"${SERVICE_USER}" "${APP_DIR}/venv" 2>/dev/null || true
+    info "Ensuring home directory access..."
+    _grant_home_access
 
     info "Updating Python dependencies..."
     run_as_root "${APP_DIR}/venv/bin/pip" install --quiet --upgrade pip

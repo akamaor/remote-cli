@@ -47,6 +47,10 @@ def setup_loggers(log_dir: str) -> tuple:
     audit = logging.getLogger("remote_cli.audit")
     audit.setLevel(logging.INFO)
     audit.addHandler(_rotating("audit.log"))
+    # Mirror to stderr so systemd/journald picks it up
+    audit_stderr = logging.StreamHandler(sys.stderr)
+    audit_stderr.setFormatter(formatter)
+    audit.addHandler(audit_stderr)
     audit.propagate = False
 
     return app, audit

@@ -21,6 +21,7 @@ class Config:
     home_dir: str
     require_confirm_dangerous: bool
     default_shell: str
+    run_as_user: str
 
 
 def load_config() -> Config:
@@ -65,6 +66,8 @@ def load_config() -> Config:
 
     default_shell = os.environ.get("DEFAULT_SHELL", "/bin/bash").strip() or "/bin/bash"
 
+    run_as_user = os.environ.get("RUN_AS_USER", "").strip()
+
     return Config(
         telegram_bot_token=token,
         allowed_user_ids=allowed_ids,
@@ -76,4 +79,5 @@ def load_config() -> Config:
         home_dir=home_dir,
         require_confirm_dangerous=require_confirm_dangerous,
         default_shell=default_shell,
+        run_as_user=run_as_user,
     )
