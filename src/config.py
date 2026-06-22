@@ -17,8 +17,10 @@ class Config:
     command_timeout: int
     max_output_lines: int
     max_output_bytes: int
-    output_format: str   # minimal | standard | compact | verbose | styled | rich
-    home_dir: str        # what ~ expands to in cd commands
+    output_format: str
+    home_dir: str
+    require_confirm_dangerous: bool
+    default_shell: str
 
 
 def load_config() -> Config:
@@ -43,9 +45,9 @@ def load_config() -> Config:
     log_dir = os.environ.get("LOG_DIR", "/var/log/remote-cli").strip()
 
     try:
-        command_timeout  = int(os.environ.get("COMMAND_TIMEOUT",  "10"))
-        max_output_lines = int(os.environ.get("MAX_OUTPUT_LINES", "50"))
-        max_output_bytes = int(os.environ.get("MAX_OUTPUT_BYTES", "3800"))
+        command_timeout  = int(os.environ.get("COMMAND_TIMEOUT",  "60"))
+        max_output_lines = int(os.environ.get("MAX_OUTPUT_LINES", "200"))
+        max_output_bytes = int(os.environ.get("MAX_OUTPUT_BYTES", "3900"))
     except ValueError:
         raise ValueError("COMMAND_TIMEOUT, MAX_OUTPUT_LINES, MAX_OUTPUT_BYTES must be integers")
 
@@ -58,6 +60,11 @@ def load_config() -> Config:
 
     home_dir = os.environ.get("HOME_DIR", "/root").strip() or "/root"
 
+    require_confirm_raw = os.environ.get("REQUIRE_CONFIRM_FOR_DANGEROUS", "true").strip().lower()
+    require_confirm_dangerous = require_confirm_raw in ("1", "true", "yes")
+
+    default_shell = os.environ.get("DEFAULT_SHELL", "/bin/bash").strip() or "/bin/bash"
+
     return Config(
         telegram_bot_token=token,
         allowed_user_ids=allowed_ids,
@@ -67,4 +74,6 @@ def load_config() -> Config:
         max_output_bytes=max_output_bytes,
         output_format=output_format,
         home_dir=home_dir,
+        require_confirm_dangerous=require_confirm_dangerous,
+        default_shell=default_shell,
     )

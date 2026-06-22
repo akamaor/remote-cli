@@ -1,18 +1,38 @@
 # Secure Remote Chat CLI
 
-Control your Linux machine through Telegram — securely, from anywhere, with a full audit trail.
+Control your Linux machine through Telegram — with a **persistent bash shell**, full shell state, and a complete audit trail.
 
 Built for machines locked behind WireGuard with **zero open inbound ports**. Uses outbound long-polling exclusively, so no firewall rules or port-forwarding ever needed.
 
 ---
 
+## How it works
+
+Every Telegram message you send is written directly into a persistent bash shell running on your server via a PTY. The shell stays alive between messages, so **all state persists**:
+
+- Current working directory (`cd` works normally)
+- Environment variables (`export FOO=bar` then `echo $FOO` → `bar`)
+- Aliases and shell functions
+- Active virtualenvs (`source venv/bin/activate` then `which python` → venv python)
+- Conda environments (`conda activate myenv` then `python` → conda python)
+- Command history
+
+All shell syntax works natively — no wrapping required:
+
+```
+|    &&    ||    ;    >    >>    $()    &
+```
+
+---
+
 ## Features
 
+- **Persistent PTY shell** — real bash session, full state across messages
 - **Telegram long-polling** — outbound only, no webhooks, no inbound ports
 - **Identity allowlist** — messages from unknown user IDs are silently dropped
-- **Shell injection prevention** — `shell=False` + `shlex.split()` throughout
-- **Hard timeout** — SIGKILL sent to the entire process group after N seconds
-- **Interactive command guard** — blocks `vim`, `ssh`, `top`, etc. before they spawn
+- **Dangerous command confirmation** — `rm -rf`, `mkfs`, `shutdown`, etc. require inline-keyboard confirmation
+- **Ctrl+C / Ctrl+D support** — interrupt a running command at any time via `/rc_ctrl_c`
+- **Shell status** — see PID, CWD, user, uptime with `/rc_status`
 - **Rotating audit log** — every command, rejection, and timeout is logged; stdout never is
 - **Unprivileged execution** — runs as a dedicated `chatcli` system user, never root
 - **Systemd hardened** — `NoNewPrivileges`, `ProtectSystem=strict`, `SystemCallFilter`, and more
@@ -29,6 +49,133 @@ cd remote-cli
 ```
 
 Select **[1] Install** from the menu. It will walk you through every step.
+
+---
+
+## Bot Commands
+
+### Shell controls
+
+| Command | Description |
+|---|---|
+| `/rc_ctrl_c` | Send Ctrl+C — interrupt a running command |
+| `/rc_ctrl_d` | Send Ctrl+D — EOF to the shell |
+| `/rc_restart` | Kill and restart the persistent shell |
+| `/rc_exit` | Close the shell (auto-restarts on next command) |
+| `/rc_status` | Show shell PID, CWD, user, uptime, last command |
+| `/rc_history` | Show last 20 commands |
+| `/rc_pwd` | Show current working directory |
+| `/rc_exec <cmd>` | One-shot isolated command (no shell state, old behaviour) |
+| `/rc_style` | Change output display style |
+| `/rc_ping` | Latency and host check |
+| `/rc_help` | Full help and command list |
+
+### System shortcuts
+
+`/sysinfo` `/hostname` `/cpu` `/uptime` `/whoami` `/env`  
+`/ls` `/df` `/disk` `/du` `/inodes`  
+`/free` `/ps` `/top5cpu` `/top5mem` `/vmstat`  
+`/ip` `/routes` `/netstat` `/connections` `/dns`  
+`/services` `/failed` `/timers`  
+`/logs` `/errors` `/auth` `/rc_logs`  
+`/who` `/last` `/users` `/sudoers`  
+`/updates` `/installed`
+
+---
+
+## Usage Examples
+
+```
+# Environment persistence
+export DATABASE_URL=postgres://localhost/mydb
+echo $DATABASE_URL
+→ postgres://localhost/mydb
+
+# Directory navigation
+cd /var/log
+ls -la
+→ lists /var/log
+
+# Virtualenv
+python3 -m venv venv && source venv/bin/activate
+which python
+→ /home/user/venv/bin/python
+
+# Pipes and chaining
+ps aux | grep nginx | wc -l
+find /var/log -name "*.log" -newer /tmp/marker | xargs wc -l
+
+# Interrupt a long-running command
+sleep 100
+/rc_ctrl_c
+→ ^C  (shell still alive)
+
+# Check shell state
+/rc_status
+→ PID: 12345
+   CWD: /var/log
+   Uptime: 5m 12s
+```
+
+---
+
+## Output Styles
+
+Switch with `/rc_style <name>` or tap the inline picker:
+
+| Style | Description |
+|---|---|
+| `terminal` | `user@host:cwd$` — classic shell prompt (default) |
+| `minimal` | Raw output only — cleanest for copy-paste |
+| `standard` | `📁 cwd` header + output |
+| `compact` | CWD and status on one line, then output |
+| `verbose` | Hostname + CWD + echoed command + timing |
+| `styled` | 🟢/🔴 emoji status + bold text |
+| `rich` | `━━` border header with hostname and CWD |
+
+---
+
+## Security Model
+
+| Layer | Mechanism |
+|---|---|
+| Network | WireGuard — zero inbound ports, long-polling only |
+| Identity | `ALLOWED_TELEGRAM_USER_IDS` allowlist in `.env` |
+| Chat scope | Private DMs only — group chats rejected |
+| Dangerous commands | Inline-keyboard confirmation for `rm -rf`, `mkfs`, `shutdown`, disk writes, etc. |
+| Timeout | PTY command timeout (default 60s), configurable up to 3600s |
+| Logging | stdout never written to log — sensitive output stays out of plaintext files |
+| Privilege | Dedicated `chatcli` system user + visudo allowlist |
+| Systemd | `NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, `SystemCallFilter` |
+
+Unauthorized senders receive **no reply** — the bot's existence is not confirmed to probing attackers.
+
+---
+
+## Configuration
+
+Copy `.env.example` to `/opt/remote-cli/.env` and fill in:
+
+```env
+TELEGRAM_BOT_TOKEN=your_token_from_botfather
+ALLOWED_TELEGRAM_USER_IDS=123456789
+HOME_DIR=/home/youruser
+
+# Shell
+DEFAULT_SHELL=/bin/bash
+REQUIRE_CONFIRM_FOR_DANGEROUS=true
+
+# Output
+OUTPUT_FORMAT=terminal
+
+# Limits
+COMMAND_TIMEOUT=60
+MAX_OUTPUT_LINES=200
+MAX_OUTPUT_BYTES=3900
+LOG_DIR=/var/log/remote-cli
+```
+
+**Get your user ID:** message [@userinfobot](https://t.me/userinfobot) on Telegram.
 
 ---
 
@@ -57,44 +204,9 @@ Select **[1] Install** from the menu. It will walk you through every step.
 
 ---
 
-## Security Model
-
-| Layer | Mechanism |
-|---|---|
-| Network | WireGuard — zero inbound ports, long-polling only |
-| Identity | `ALLOWED_TELEGRAM_USER_IDS` allowlist in `.env` |
-| Chat scope | Private DMs only — group chats rejected |
-| Execution | `shell=False` + `shlex.split()` — no injection surface |
-| Timeout | `SIGKILL` on entire process group via `os.killpg` |
-| Interactive block | Blocklist checked before spawn; `stdin=DEVNULL` as backstop |
-| Logging | stdout never written to log — sensitive output stays out of plaintext files |
-| Privilege | Dedicated `chatcli` system user + visudo allowlist |
-| Systemd | `NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp`, `SystemCallFilter` |
-
-Unauthorized senders receive **no reply** — the bot's existence is not confirmed to probing attackers.
-
----
-
-## Configuration
-
-Copy `.env.example` to `/opt/remote-cli/.env` and fill in:
-
-```env
-TELEGRAM_BOT_TOKEN=your_token_from_botfather
-ALLOWED_TELEGRAM_USER_IDS=123456789
-COMMAND_TIMEOUT=10
-MAX_OUTPUT_LINES=50
-MAX_OUTPUT_BYTES=3800
-LOG_DIR=/var/log/remote-cli
-```
-
-**Get your user ID:** message [@userinfobot](https://t.me/userinfobot) on Telegram.
-
----
-
 ## Sudo Allowlist
 
-The `chatcli` user can be granted passwordless access to specific commands via `/etc/sudoers.d/chatcli`. A documented template is provided:
+The `chatcli` user can be granted passwordless access to specific commands via `/etc/sudoers.d/chatcli`:
 
 ```bash
 # From the management console:
@@ -103,7 +215,7 @@ The `chatcli` user can be granted passwordless access to specific commands via `
 # Or manually:
 sudo cp scripts/sudoers_chatcli.example /etc/sudoers.d/chatcli
 sudo chmod 440 /etc/sudoers.d/chatcli
-sudo visudo -f /etc/sudoers.d/chatcli   # edit to your needs
+sudo visudo -f /etc/sudoers.d/chatcli
 ```
 
 Only list commands you actually use. Avoid wildcards like `systemctl *`.
@@ -120,9 +232,10 @@ remote-cli/
 ├── src/
 │   ├── main.py                   ← entry point
 │   ├── config.py                 ← loads and validates .env
-│   ├── executor.py               ← command engine (shlex, SIGKILL, truncation)
-│   ├── security.py               ← allowlist check, interactive command blocklist
-│   ├── telegram_bot.py           ← long-polling bot, access control, HTML replies
+│   ├── pty_shell.py              ← persistent PTY bash session (PtyShell)
+│   ├── executor.py               ← one-shot command engine (used by /rc_exec)
+│   ├── security.py               ← allowlist check, dangerous command patterns
+│   ├── telegram_bot.py           ← long-polling bot, PTY routing, all handlers
 │   └── logger_setup.py           ← rotating app.log + audit.log
 ├── systemd/
 │   └── remote-cli.service        ← hardened unit file
@@ -152,6 +265,9 @@ python-dotenv>=1.0.0
 ## Roadmap
 
 - [x] Telegram (long-polling)
+- [x] Persistent PTY shell — full bash state across messages
+- [x] Ctrl+C / Ctrl+D support
+- [x] Dangerous command confirmation
 - [ ] Signal integration
 - [ ] WhatsApp integration
 
